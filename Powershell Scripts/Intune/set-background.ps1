@@ -1,6 +1,6 @@
 ##NOTE: THIS HAS TO RUN IN 64-BIT MODE!
 ##Set this URL
-$url = "https://url.here"
+$url = "https://github.com/FullDad/mfiles/blob/main/MH_Wallpaper.png"
 
 
 
