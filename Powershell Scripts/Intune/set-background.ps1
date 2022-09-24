@@ -1,8 +1,6 @@
 ##NOTE: THIS HAS TO RUN IN 64-BIT MODE!
 ##Set this URL
-$url = "https://github.com/FullDad/mfiles/blob/main/MH_Wallpaper.png"
-
-
+$url = "https://github.com/FullDad/mfiles/blob/main/MHWallpaper.png"
 
 
 $RegKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP"
