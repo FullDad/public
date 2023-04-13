@@ -2,14 +2,15 @@
 ::Description - Backs Up favourites, music, signatures, Outlook settings, templates, UI settings, stickynotes, chrome bookmarks, email signature and mapped drives from local PC to OneDrive
 ::Inputs - None
 ::Outputs - Logs to a backup script on OneDrive
-::Version - 1.3
+::Version - 1.4
 ::Created By - Andrew Taylor @ andrewstaylor.com
 ::Updates - Initial Update
-::Updated 27-01 - Backing up links files
+::Updated 13-01-23 - Backing up links files
 ::Moved Favourites to resolve issue
 ::Updated added XLStart and WordStartup
+::Updated added Start Menu after ASRmageddon
 
-Sleep 10
+ping 127.0.0.1 -n 10
 
 ::GET DESKTOP
 echo CopyingDesktop > "%Onedrive%\backup\log.txt"
@@ -41,6 +42,38 @@ if not exist "%Onedrive%\Documents" mkdir "%Onedrive%\Documents"
 XCopy "%BDocs%\*" "%Onedrive%\Documents" /E /Y /C /Z /D >> "%Onedrive%\backup\log.txt"
 if not exist "%OneDriveCommercial%\Documents" mkdir "%OneDriveCommercial%\Documents"
 XCopy "%BDocs%\*" "%OneDriveCommercial%\Documents" /E /Y /C /Z /D >> "%OneDriveCommercial%\backup\log.txt"
+
+::GET Public StartMenu
+echo CopyingPublicStart >> "%Onedrive%\backup\log.txt"
+echo CopyingPublicStart >> "%OneDriveCommercial%\backup\log.txt"
+SET Bstartp=C:\ProgramData\Microsoft\Windows\Start Menu\Programs
+SET Rstartp="%Onedrive%\Backup\StartMenuP"
+if not exist "%Onedrive%\Backup\StartMenuP" mkdir "%Onedrive%\Backup\StartMenuP"
+XCopy "%Bstartp%\*" "%Onedrive%\Backup\StartMenuP" /E /Y /C /Z /D >> "%Onedrive%\backup\log.txt"
+if not exist "%OneDriveCommercial%\Backup\StartMenuP" mkdir "%OneDriveCommercial%\Backup\StartMenuP"
+XCopy "%Bstartp%\*" "%OneDriveCommercial%\Backup\StartMenuP" /E /Y /C /Z /D >> "%OneDriveCommercial%\backup\log.txt"
+
+::GET User StartMenu
+echo CopyingUserStart >> "%Onedrive%\backup\log.txt"
+echo CopyingUserStart >> "%OneDriveCommercial%\backup\log.txt"
+SET Bstartu=%APPDATA%\Microsoft\Windows\Start Menu\Programs
+SET Rstartu="%Onedrive%\Backup\StartMenuU"
+if not exist "%Onedrive%\Backup\StartMenuU" mkdir "%Onedrive%\Backup\StartMenuU"
+XCopy "%Bstartu%\*" "%Onedrive%\Backup\StartMenuU" /E /Y /C /Z /D >> "%Onedrive%\backup\log.txt"
+if not exist "%OneDriveCommercial%\Backup\StartMenuU" mkdir "%OneDriveCommercial%\Backup\StartMenuU"
+XCopy "%Bstartp%\*" "%OneDriveCommercial%\Backup\StartMenuU" /E /Y /C /Z /D >> "%OneDriveCommercial%\backup\log.txt"
+
+::GET User Taskbar Items
+echo CopyingUserTaskbar >> "%Onedrive%\backup\log.txt"
+echo CopyingUserTaskbar >> "%OneDriveCommercial%\backup\log.txt"
+SET BTasku=%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar
+SET RTasku="%Onedrive%\Backup\TaskBar"
+if not exist "%Onedrive%\Backup\TaskBar" mkdir "%Onedrive%\Backup\TaskBar"
+XCopy "%BTasku%\*" "%Onedrive%\Backup\TaskBar" /E /Y /C /Z /D >> "%Onedrive%\backup\log.txt"
+reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" "%Onedrive%\Backup\TaskBar\task.reg" /y >> "%OneDriveCommercial%\backup\log.txt"
+if not exist "%OneDriveCommercial%\Backup\TaskBar" mkdir "%OneDriveCommercial%\Backup\TaskBar" >> "%OneDriveCommercial%\backup\log.txt"
+XCopy "%BTasku%\*" "%OneDriveCommercial%\Backup\TaskBar" /E /Y /C /Z /D >> "%OneDriveCommercial%\backup\log.txt"
+reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband" "C:\Temp\My_Registry_Key.reg" /y >> "%OneDriveCommercial%\backup\log.txt"
 
 ::GET SIGNATURES
 echo CopyingSignatures >> "%Onedrive%\backup\log.txt"
@@ -90,7 +123,7 @@ SET Bxlstart=%APPDATA%\Microsoft\Excel\XLStart
 SET Rxlstart="%Onedrive%\Backup\XLStart"
 if not exist "%Onedrive%\Backup\XLStart" mkdir "%Onedrive%\Backup\XLStart"
 XCopy "%Bxlstart%\*" "%Onedrive%\Backup\XLStart" /E /Y /C /Z /D >> "%Onedrive%\backup\log.txt"
-if not exist "%OneDriveCommercial%\XLStart" mkdir "%OneDriveCommercial%\XLStart"
+if not exist "%OneDriveCommercial%\Backup\XLStart" mkdir "%OneDriveCommercial%\Backup\XLStart"
 XCopy "%Bxlstart%\*" "%OneDriveCommercial%\Backup\XLStart\" /E /Y /C /Z /D >> "%OneDriveCommercial%\backup\log.txt"
 
 
@@ -101,7 +134,7 @@ SET Bwordst=%APPDATA%\Microsoft\Word\STARTUP
 SET Rwordst="%Onedrive%\Backup\Wordstartup"
 if not exist "%Onedrive%\Backup\Wordstartup" mkdir "%Onedrive%\Backup\Wordstartup"
 XCopy "%Bwordst%\*" "%Onedrive%\Backup\Wordstartup" /E /Y /C /Z /D >> "%Onedrive%\backup\log.txt"
-if not exist "%OneDriveCommercial%\Wordstartup" mkdir "%OneDriveCommercial%\Wordstartup"
+if not exist "%OneDriveCommercial%\Backup\Wordstartup" mkdir "%OneDriveCommercial%\Backup\Wordstartup"
 XCopy "%Bwordst%\*" "%OneDriveCommercial%\Backup\Wordstartup\" /E /Y /C /Z /D >> "%OneDriveCommercial%\backup\log.txt"
 
 ::GET PST 

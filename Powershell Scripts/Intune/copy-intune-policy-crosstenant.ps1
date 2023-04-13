@@ -1,6 +1,6 @@
-[System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Scope='Function', Target='Get-MSGraphAllPages')]
+#[System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Scope='Function', Target='Get-MSGraphAllPages')]
 <#PSScriptInfo
-.VERSION 3.0.1
+.VERSION 6.0.8
 .GUID ec2a6c43-35ad-48cd-b23c-da987f1a528b
 .AUTHOR AndrewTaylor
 .DESCRIPTION Copies any Intune Policy via Microsoft Graph to "Copy of (policy name)".  Displays list of policies using GridView to select which to copy.  Cross tenant version
@@ -26,12 +26,11 @@ None
 .OUTPUTS
 Creates a log file in %Temp%
 .NOTES
-  Version:        3.0.1
+  Version:        6.0.8
   Author:         Andrew Taylor
-  Twitter:        @AndrewTaylor_2
   WWW:            andrewstaylor.com
   Creation Date:  25/07/2022
-  Updated: 15/09/2022
+  Updated: 21/03/2023
   Purpose/Change: Initial script development
   Change: Added support for multiple policy selection
   Change: Added Module installation
@@ -44,185 +43,269 @@ Creates a log file in %Temp%
   Change: Added support for Conditional Access policies
   Change: Added support for Proactive Remediations
   Change: Added support for AAD Groups
+  Change: Fixed issue with multiple admin templates (passed ID in array variable)
+  Change: Switched to Graph Authentication API
+  Change: Removed error text when looping through policies to inspect
+  Change: Fixed Syntax on omaSettings
+  Change: Added scope for CA policies
+  Change: Added support for Winget Store Apps
+  Change: Fixed issue with security policies
+  Change: Added support for PowerShell Scripts
+  Change: Added support for W365 Provisioning Policies
+  Change: Added support for W365 User Settings Policies
+  Change: Added support for Policy Sets
+  Change: Added support for Enrollment Configuration Policies
+  Change: Added support for Device Categories
+  Change: Added support for Device Filters
+  Change: Added support for Branding Profiles
+  Change: Added support for Admin Approvals
+  Change: Added support for Intune Terms
+  Change: Added support for custom roles
+  Change: Added fix for large Settings Catalog Policies (thanks Jordan in the blog comments)
+  Change: Added support for pagination when grabbing Settings Catalog policies (thanks to randomsunrize on GitHub)
+  Change: Switched do-until for while loop for pagination
+  Change: Added Automation Support
+  Change: Added parameters for name, ID and tenant details
+  Change: Added find ID by name functionality
+  Change: Fixed pagination link
+  Change: Added scopes for Win365
+  Change: Added support for custom compliance scripts
+  Change: Performance improvement (significantly faster)
+  Change: Removed pagination error (whitespace)
+  Change: Bug fix when calling by ID alone
+  Change: Pagination fix (Mark Goodman)
+  Change: Revert change to connect-mggraph
+  Change: Added support for Windows Hello for Business Config
+  Change: Fixed issue with security intents not importing settings
+  Change: Conditional Access fix
+
   
 .EXAMPLE
 N/A
 #>
+##################################################################################################################################
+#################                                                  PARAMS                                        #################
+##################################################################################################################################
+
+[cmdletbinding()]
+    
+param
+(
+    [string[]]$name #Item Name
+    ,  
+    [string[]]$id #Item ID
+    ,  
+    [string]$everything #Copies EVERYTHING
+    ,  
+    [string]$sourcetenant #Source Tenant
+    ,  
+    [string]$desttenant #Destination Tenant
+    )
+
+##################################################################################################################################
+#################                                                  INITIALIZATION                                #################
+##################################################################################################################################
+
+##Check if parameters have been set
+$namecheck = $PSBoundParameters.ContainsKey('name')
+$idcheck = $PSBoundParameters.ContainsKey('id')
+$everythingcheck = $PSBoundParameters.ContainsKey('everything')
+$sourcetenantcheck = $PSBoundParameters.ContainsKey('sourcetenant')
+$desttenantcheck = $PSBoundParameters.ContainsKey('desttenant')
 
 
+
+
+if ($idcheck -eq $true) {
+    $inputid = $id
+}
 $ErrorActionPreference = "Continue"
 ##Start Logging to %TEMP%\intune.log
 $date = get-date -format yyyyMMddTHHmmssffff
 Start-Transcript -Path $env:TEMP\intune-$date.log
 
 #Install MS Graph if not available
-if (Get-Module -ListAvailable -Name Microsoft.Graph.Intune) {
-    Write-Host "Microsoft Graph Already Installed"
+
+
+Write-Host "Installing Microsoft Graph modules if required (current user scope)"
+
+#Install MS Graph if not available
+Write-Host "Installing Microsoft Graph modules if required (current user scope)"
+
+#Install MS Graph if not available
+#Install MS Graph if not available
+if (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication) {
+    Write-Host "Microsoft Graph Authentication Already Installed"
 } 
 else {
-    try {
-        Install-Module -Name Microsoft.Graph.Intune -Scope CurrentUser -Repository PSGallery -Force 
-    }
-    catch [Exception] {
-        $_.message 
-        exit
-    }
+        Install-Module -Name Microsoft.Graph.Authentication -Scope CurrentUser -Repository PSGallery -Force -RequiredVersion 1.19.0 
+        Write-Host "Microsoft Graph Authentication Installed"
 }
 
-
-#Install AZ Module if not available
-if (Get-Module -ListAvailable -Name AzureADPreview) {
-    Write-Host "AZ Ad Preview Module Already Installed"
+#Install MS Graph if not available
+if (Get-Module -ListAvailable -Name microsoft.graph.devices.corporatemanagement ) {
+    Write-Host "Microsoft Graph Corporate Management Already Installed"
 } 
 else {
-    try {
-        Install-Module -Name AzureADPreview -Scope CurrentUser -Repository PSGallery -Force -AllowClobber 
+        Install-Module -Name microsoft.graph.devices.corporatemanagement  -Scope CurrentUser -Repository PSGallery -Force -RequiredVersion 1.19.0  
+        Write-Host "Microsoft Graph Corporate Management Installed"
     }
-    catch [Exception] {
-        $_.message 
-        exit
+
+    if (Get-Module -ListAvailable -Name Microsoft.Graph.Groups) {
+        Write-Host "Microsoft Graph Groups Already Installed "
+    } 
+    else {
+            Install-Module -Name Microsoft.Graph.Groups -Scope CurrentUser -Repository PSGallery -Force -RequiredVersion 1.19.0  
+            Write-Host "Microsoft Graph Groups Installed"
     }
-}
-Import-Module Microsoft.Graph.Intune
+    
+    #Install MS Graph if not available
+    if (Get-Module -ListAvailable -Name Microsoft.Graph.DeviceManagement) {
+        Write-Host "Microsoft Graph DeviceManagement Already Installed"
+    } 
+    else {
+            Install-Module -Name Microsoft.Graph.DeviceManagement -Scope CurrentUser -Repository PSGallery -Force -RequiredVersion 1.19.0  
+            Write-Host "Microsoft Graph DeviceManagement Installed"
+    }
 
-#Group creation needs preview module so we need to remove non-preview first
-# Unload the AzureAD module (or continue if it's already unloaded)
-Remove-Module AzureAD -force -ErrorAction SilentlyContinue
-# Load the AzureADPreview module
-Import-Module AzureADPreview
+    #Install MS Graph if not available
+    if (Get-Module -ListAvailable -Name Microsoft.Graph.identity.signins) {
+        Write-Host "Microsoft Graph Identity SignIns Already Installed"
+    } 
+    else {
+            Install-Module -Name Microsoft.Graph.Identity.SignIns -Scope CurrentUser -Repository PSGallery -Force -RequiredVersion 1.19.0  
+            Write-Host "Microsoft Graph Identity SignIns Installed"
+    }
 
 
 
+# Load the Graph module
+Import-Module microsoft.graph.authentication
+import-module Microsoft.Graph.Identity.SignIns
+import-module Microsoft.Graph.DeviceManagement
+import-module microsoft.Graph.Groups
+import-module microsoft.graph.devices.corporatemanagement
 
-###############################################################################################################
-######                                          Add Functions                                            ######
-###############################################################################################################
 
 
+##Disconnect just in case anything is lingering
+Disconnect-MgGraph
 
-function Get-AuthToken {
-
+Function Get-ScriptVersion(){
+    
     <#
     .SYNOPSIS
-    This function is used to authenticate with the Graph API REST interface
+    This function is used to check if the running script is the latest version
     .DESCRIPTION
-    The function authenticate with the Graph API Interface with the tenant name
+    This function checks GitHub and compares the 'live' version with the one running
     .EXAMPLE
-    Get-AuthToken
-    Authenticates you with the Graph API interface
+    Get-ScriptVersion
+    Returns a warning and URL if outdated
     .NOTES
-    NAME: Get-AuthToken
+    NAME: Get-ScriptVersion
     #>
     
     [cmdletbinding()]
     
     param
     (
-        [Parameter(Mandatory=$true)]
-        $User
+        $liveuri
+    )
+$contentheaderraw = (Invoke-WebRequest -Uri $liveuri -Method Get)
+$contentheader = $contentheaderraw.Content.Split([Environment]::NewLine)
+$liveversion = (($contentheader | Select-String 'Version:') -replace '[^0-9.]','') | Select-Object -First 1
+$currentversion = ((Get-Content -Path $PSCommandPath | Select-String -Pattern "Version: *") -replace '[^0-9.]','') | Select-Object -First 1
+if ($liveversion -ne $currentversion) {
+write-warning "Script has been updated, please download the latest version from $liveuri"
+}
+}
+Get-ScriptVersion -liveuri "https://raw.githubusercontent.com/andrew-s-taylor/public/main/Powershell%20Scripts/Intune/copy-intune-policy-crosstenant.ps1"
+
+
+############################################################
+############################################################
+############# CHANGE THIS TO USE IN AUTOMATION #############
+############################################################
+############################################################
+$automated = "no"
+############################################################
+############################################################
+#############           AUTOMATION NOTES       #############
+############################################################
+
+## You need to add these modules to your Automation Account if using Azure Automation
+## Don't use the V2 preview versions
+## https://www.powershellgallery.com/packages/PackageManagement/1.4.8.1
+## https://www.powershellgallery.com/packages/Microsoft.Graph.Authentication/1.19.0
+## https://www.powershellgallery.com/packages/Microsoft.Graph.Devices.CorporateManagement/1.19.0
+## https://www.powershellgallery.com/packages/Microsoft.Graph.Groups/1.19.0
+## https://www.powershellgallery.com/packages/Microsoft.Graph.DeviceManagement/1.19.0
+## https://www.powershellgallery.com/packages/Microsoft.Graph.Identity.SignIns/1.19.0
+
+if ($automated -eq "yes") {
+    ##################################################################################################################################
+    #################                                                  VARIABLES                                     #################
+    ##################################################################################################################################
+    
+  
+    $clientid = "YOUR_AAD_REG_ID"
+    
+    $clientsecret = "YOUR_CLIENT_SECRET"
+    
+    ##Only use if not set in script parameters
+    if ($sourcetenantcheck -ne $true) {
+    $sourcetenant = "TENANT_ID"
+    }
+     ##Only use if not set in script parameters
+    if ($desttenantcheck -ne $true) {
+    $desttenant = "TENANT_ID"
+    }   
+    
+    ##################################################################################################################################
+    #################                                             END  VARIABLES                                     #################
+    ##################################################################################################################################
+    }
+###############################################################################################################
+######                                          Add Functions                                            ######
+###############################################################################################################
+
+Function Get-IntuneApplication(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get applications from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any applications added
+    .EXAMPLE
+    Get-IntuneApplication
+    Returns any applications configured in Intune
+    .NOTES
+    NAME: Get-IntuneApplication
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
     )
     
-    $userUpn = New-Object "System.Net.Mail.MailAddress" -ArgumentList $User
-    
-    $tenant = $userUpn.Host
-    
-    Write-Host "Checking for AzureAD module..."
-    
-        $AadModule = Get-Module -Name "AzureADPreview" -ListAvailable
-    
-        if ($AadModule -eq $null) {
-    
-            Write-Host "AzureAD PowerShell module not found, looking for AzureADPreview"
-            $AadModule = Get-Module -Name "AzureADPreview" -ListAvailable
-    
-        }
-    
-        if ($AadModule -eq $null) {
-            write-host
-            write-host "AzureAD Powershell module not installed..." -f Red
-            write-host "Install by running 'Install-Module AzureAD' or 'Install-Module AzureADPreview' from an elevated PowerShell prompt" -f Yellow
-            write-host "Script can't continue..." -f Red
-            write-host
-            exit
-        }
-    
-    # Getting path to ActiveDirectory Assemblies
-    # If the module count is greater than 1 find the latest version
-    
-        if($AadModule.count -gt 1){
-    
-            $Latest_Version = ($AadModule | select version | Sort-Object)[-1]
-    
-            $aadModule = $AadModule | ? { $_.version -eq $Latest_Version.version }
-    
-                # Checking if there are multiple versions of the same module found
-    
-                if($AadModule.count -gt 1){
-    
-                $aadModule = $AadModule | select -Unique
-    
-                }
-    
-            $adal = Join-Path $AadModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.dll"
-            $adalforms = Join-Path $AadModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.Platform.dll"
-    
-        }
-    
-        else {
-    
-            $adal = Join-Path $AadModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.dll"
-            $adalforms = Join-Path $AadModule.ModuleBase "Microsoft.IdentityModel.Clients.ActiveDirectory.Platform.dll"
-    
-        }
-    
-    [System.Reflection.Assembly]::LoadFrom($adal) | Out-Null
-    
-    [System.Reflection.Assembly]::LoadFrom($adalforms) | Out-Null
-    
-    $clientId = "d1ddf0e4-d672-4dae-b554-9d5bdfd93547"
-    
-    $redirectUri = "urn:ietf:wg:oauth:2.0:oob"
-    
-    $resourceAppIdURI = "https://graph.microsoft.com"
-    
-    $authority = "https://login.microsoftonline.com/$Tenant"
+    $graphApiVersion = "Beta"
+    $Resource = "deviceAppManagement/mobileApps"
     
         try {
     
-        $authContext = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.AuthenticationContext" -ArgumentList $authority
+            if($id){
     
-        # https://msdn.microsoft.com/en-us/library/azure/microsoft.identitymodel.clients.activedirectory.promptbehavior.aspx
-        # Change the prompt behaviour to force credentials each time: Auto, Always, Never, RefreshSession
-    
-        $platformParameters = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.PlatformParameters" -ArgumentList "Auto"
-    
-        $userId = New-Object "Microsoft.IdentityModel.Clients.ActiveDirectory.UserIdentifier" -ArgumentList ($User, "OptionalDisplayableId")
-    
-        $authResult = $authContext.AcquireTokenAsync($resourceAppIdURI,$clientId,$redirectUri,$platformParameters,$userId).Result
-    
-            # If the accesstoken is valid then create the authentication header
-    
-            if($authResult.AccessToken){
-    
-            # Creating header for Authorization token
-    
-            $authHeader = @{
-                'Content-Type'='application/json'
-                'Authorization'="Bearer " + $authResult.AccessToken
-                'ExpiresOn'=$authResult.ExpiresOn
-                'ConsistencyLevel' = 'eventual'
-                }
-    
-            return $authHeader
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
     
             }
     
             else {
     
-            Write-Host
-            Write-Host "Authorization Access Token is null, please re-run authentication..." -ForegroundColor Red
-            Write-Host
-            break
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value | Where-Object { ($_.'@odata.type').Contains("#microsoft.graph.winGetApp") }
     
             }
     
@@ -230,79 +313,11 @@ function Get-AuthToken {
     
         catch {
     
-        write-host $_.Exception.Message -f Red
-        write-host $_.Exception.ItemName -f Red
-        write-host
-        break
-    
         }
     
     }
-    
-###############################################################################################################
 
-function Get-MSGraphAllPages {
-    [CmdletBinding(
-        ConfirmImpact = 'Medium',
-        DefaultParameterSetName = 'SearchResult'
-    )]
-    param (
-        [Parameter(Mandatory = $true, ParameterSetName = 'NextLink', ValueFromPipelineByPropertyName = $true)]
-        [ValidateNotNullOrEmpty()]
-        [Alias('@odata.nextLink')]
-        [string]$NextLink,
 
-        [Parameter(Mandatory = $true, ParameterSetName = 'SearchResult', ValueFromPipeline = $true)]
-        [ValidateNotNull()]
-        [PSObject]$SearchResult
-    )
-
-    begin {}
-
-    process {
-        if ($PSCmdlet.ParameterSetName -eq 'SearchResult') {
-            # Set the current page to the search result provided
-            $page = $SearchResult
-
-            # Extract the NextLink
-            $currentNextLink = $page.'@odata.nextLink'
-
-            # We know this is a wrapper object if it has an "@odata.context" property
-            if (Get-Member -InputObject $page -Name '@odata.context' -Membertype Properties) {
-                $values = $page.value
-            } else {
-                $values = $page
-            }
-
-            # Output the values
-            if ($values) {
-                $values | Write-Output
-            }
-        }
-
-        while (-Not ([string]::IsNullOrWhiteSpace($currentNextLink)))
-        {
-            # Make the call to get the next page
-            try {
-                $page = Get-MSGraphNextPage -NextLink $currentNextLink
-            } catch {
-                throw
-            }
-
-            # Extract the NextLink
-            $currentNextLink = $page.'@odata.nextLink'
-
-            # Output the items in the page
-            $values = $page.value
-            if ($values) {
-                $values | Write-Output
-            }
-        }
-    }
-
-    end {}
-}
-#############################################################################################################    
 
 Function Get-DeviceConfigurationPolicyGP(){
     
@@ -328,39 +343,23 @@ Function Get-DeviceConfigurationPolicyGP(){
     $graphApiVersion = "beta"
     $DCP_resource = "deviceManagement/groupPolicyConfigurations"
     
-        try {
-    
+    try {
             if($id){
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$filter=id eq '$id'"
-            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
     
             }
     
             else {
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
     
             }
-    
         }
-    
-        catch {
-    
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
-        
-    
-        }
-    
+        catch {}
+     
 }
 
 
@@ -388,29 +387,27 @@ Function Get-ConditionalAccessPolicy(){
     )
     
 
+    $graphApiVersion = "beta"
+    $DCP_resource = "identity/conditionalAccess/policies"
     
-        try {
-    
+    try {
             if($id){
     
-                Get-AzureADMSConditionalAccessPolicy -PolicyId $id
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
     
             }
     
             else {
     
-                Get-AzureADMSConditionalAccessPolicy
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
+    
             }
-    
         }
+        catch {}
     
-        catch {
-    
-
-        
-    
-        }
-    
+     
 }
 
 ####################################################
@@ -439,39 +436,24 @@ Function Get-DeviceConfigurationPolicy(){
     $graphApiVersion = "beta"
     $DCP_resource = "deviceManagement/deviceConfigurations"
     
-        try {
-    
+    try {
             if($id){
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$filter=id eq '$id'"
-            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
     
             }
     
             else {
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
     
             }
-    
         }
+        catch {}
     
-        catch {
-    
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        Write-Host "Response content:`n$responseBody" -f Red
-        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        write-host
         
-    
-        }
-    
 }
     
 ##########################################################################################
@@ -503,30 +485,14 @@ Function Get-GroupPolicyConfigurationsDefinitionValues()
 	#$DCP_resource = "deviceManagement/groupPolicyConfigurations/$GroupPolicyConfigurationID/definitionValues?`$filter=enabled eq true"
 	$DCP_resource = "deviceManagement/groupPolicyConfigurations/$GroupPolicyConfigurationID/definitionValues"
 	
-	
-	try
-	{
-		
+	try {	
 		$uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+		(Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
 		
-	}
+    }
+    catch{}
 	
-	catch
-	{
-		
-		$ex = $_.Exception
-		$errorResponse = $ex.Response.GetResponseStream()
-		$reader = New-Object System.IO.StreamReader($errorResponse)
-		$reader.BaseStream.Position = 0
-		$reader.DiscardBufferedData()
-		$responseBody = $reader.ReadToEnd();
-		Write-Host "Response content:`n$responseBody" -f Red
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		write-host
-		break
-		
-	}
+
 	
 }
 
@@ -557,30 +523,12 @@ Function Get-GroupPolicyConfigurationsDefinitionValuesPresentationValues()
 	$graphApiVersion = "Beta"
 	
 	$DCP_resource = "deviceManagement/groupPolicyConfigurations/$GroupPolicyConfigurationID/definitionValues/$GroupPolicyConfigurationsDefinitionValueID/presentationValues"
-	
-	try
-	{
-		
+	try {
 		$uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+		(Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    }
+    catch {}
 		
-	}
-	
-	catch
-	{
-		
-		$ex = $_.Exception
-		$errorResponse = $ex.Response.GetResponseStream()
-		$reader = New-Object System.IO.StreamReader($errorResponse)
-		$reader.BaseStream.Position = 0
-		$reader.DiscardBufferedData()
-		$responseBody = $reader.ReadToEnd();
-		Write-Host "Response content:`n$responseBody" -f Red
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		write-host
-		break
-		
-	}
 	
 }
 
@@ -609,32 +557,15 @@ Function Get-GroupPolicyConfigurationsDefinitionValuesdefinition ()
 	)
 	$graphApiVersion = "Beta"
 	$DCP_resource = "deviceManagement/groupPolicyConfigurations/$GroupPolicyConfigurationID/definitionValues/$GroupPolicyConfigurationsDefinitionValueID/definition"
-	
-	try
-	{
+	try {
 		
 		$uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
 		
-		$responseBody = Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
+		$responseBody = Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject
+    }
+    catch{}
 		
 		
-	}
-	
-	catch
-	{
-		
-		$ex = $_.Exception
-		$errorResponse = $ex.Response.GetResponseStream()
-		$reader = New-Object System.IO.StreamReader($errorResponse)
-		$reader.BaseStream.Position = 0
-		$reader.DiscardBufferedData()
-		$responseBody = $reader.ReadToEnd();
-		Write-Host "Response content:`n$responseBody" -f Red
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		write-host
-		break
-		
-	}
 	$responseBody
 }
 
@@ -665,31 +596,12 @@ Function Get-GroupPolicyDefinitionsPresentations ()
 	)
 	$graphApiVersion = "Beta"
 	$DCP_resource = "deviceManagement/groupPolicyConfigurations/$groupPolicyDefinitionsID/definitionValues/$GroupPolicyConfigurationsDefinitionValueID/presentationValues?`$expand=presentation"
-	try
-	{
-		
 		$uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+		try {
+		(Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value.presentation
+        }
+        catch {}
 		
-		(Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value.presentation
-		
-		
-	}
-	
-	catch
-	{
-		
-		$ex = $_.Exception
-		$errorResponse = $ex.Response.GetResponseStream()
-		$reader = New-Object System.IO.StreamReader($errorResponse)
-		$reader.BaseStream.Position = 0
-		$reader.DiscardBufferedData()
-		$responseBody = $reader.ReadToEnd();
-		Write-Host "Response content:`n$responseBody" -f Red
-		Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-		write-host
-		break
-		
-	}
 	
 }
 
@@ -719,39 +631,38 @@ Function Get-DeviceConfigurationPolicySC(){
             
             $graphApiVersion = "beta"
             $DCP_resource = "deviceManagement/configurationPolicies"
-            
-                try {
-            
+            try {
                     if($id){
             
                     $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$filter=id eq '$id'"
-                    (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+                    (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
             
                     }
             
                     else {
-            
-                    $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-                    (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
-            
-                    }
-            
-                }
-            
-                catch {
-            
-                $ex = $_.Exception
-                $errorResponse = $ex.Response.GetResponseStream()
-                $reader = New-Object System.IO.StreamReader($errorResponse)
-                $reader.BaseStream.Position = 0
-                $reader.DiscardBufferedData()
-                $responseBody = $reader.ReadToEnd();
-                Write-Host "Response content:`n$responseBody" -f Red
-                Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-                write-host
+
+                        $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+                        $allconfigurationsettingscatalogpages = @()
+                        $configurationsettingscatalog = Invoke-MgGraphRequest -Uri $uri -Method Get
+                        $allconfigurationsettingscatalogpages += $configurationsettingscatalog.value
+                                $policynextlink = $configurationsettingscatalog."@odata.nextlink"
+                                $policynextlink = $policynextlink -replace '\S', ''
+                                while (($policynextlink -ne "") -and ($null -ne $policynextlink))
+                                {
+                $nextsettings = (Invoke-MgGraphRequest -Uri $policynextlink -Method Get -OutputType PSObject)
+                $policynextlink = $nextsettings."@odata.nextLink"
+                $policynextlink = $policynextlink -replace '\S', ''
+                $allconfigurationsettingscatalogpages += $nextsettings.value
+            }
+
                 
-            
+                        $configurationsettingscatalog = $allconfigurationsettingscatalogpages
+                        $configurationsettingscatalog
+                
+                        }
                 }
+                catch {}
+            
             
 }
             
@@ -783,43 +694,75 @@ Function Get-DeviceProactiveRemediations(){
     
     $graphApiVersion = "beta"
     $DCP_resource = "deviceManagement/devicehealthscripts"
-    
-        try {
-    
+    try {
             if($id){
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
-            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get)
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
     
             }
     
             else {
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
     
             }
-    
         }
+        catch {}
     
-        catch {
-    
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        #Write-Host "Response content:`n$responseBody" -f Red
-        #Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        #write-host
-        
-    
-        }
-    
+   
 }
     
 ################################################################################################
+
+####################################################
+    
+Function Get-DeviceManagementScripts(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device PowerShell scripts from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device scripts
+    .EXAMPLE
+    Get-DeviceManagementScripts
+    Returns any device management scripts configured in Intune
+    .NOTES
+    NAME: Get-DeviceManagementScripts
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/devicemanagementscripts"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+    
+################################################################################################
+
     
 Function Get-DeviceCompliancePolicy(){
     
@@ -844,40 +787,65 @@ Function Get-DeviceCompliancePolicy(){
             
             $graphApiVersion = "beta"
             $DCP_resource = "deviceManagement/deviceCompliancePolicies"
-            
-                try {
-            
+            try {
                     if($id){
             
                     $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$filter=id eq '$id'"
-                    (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+                    (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
             
                     }
             
                     else {
             
                     $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-                    (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+                    (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
             
                     }
-            
                 }
+                catch {}
             
-                catch {
-            
-                $ex = $_.Exception
-                $errorResponse = $ex.Response.GetResponseStream()
-                $reader = New-Object System.IO.StreamReader($errorResponse)
-                $reader.BaseStream.Position = 0
-                $reader.DiscardBufferedData()
-                $responseBody = $reader.ReadToEnd();
-                Write-Host "Response content:`n$responseBody" -f Red
-                Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-                write-host
-                
-            
-                }
-            
+}
+
+Function Get-DeviceCompliancePolicyScripts(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device custom compliance policy scripts from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device compliance policies
+    .EXAMPLE
+    Get-DeviceCompliancePolicyScripts
+    Returns any device compliance policy scripts configured in Intune
+    .NOTES
+    NAME: Get-DeviceCompliancePolicyScripts
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/deviceComplianceScripts"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
 }
             
 #################################################################################################
@@ -904,40 +872,23 @@ Function Get-DeviceSecurityPolicy(){
             
             $graphApiVersion = "beta"
             $DCP_resource = "deviceManagement/intents"
-            
-                try {
-            
+            try {
                     if($id){
             
                     $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$filter=id eq '$id'"
-                    (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+                    (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
             
                     }
             
                     else {
             
                     $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-                    (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+                    (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
             
                     }
-            
                 }
-            
-                catch {
-            
-                $ex = $_.Exception
-                $errorResponse = $ex.Response.GetResponseStream()
-                $reader = New-Object System.IO.StreamReader($errorResponse)
-                $reader.BaseStream.Position = 0
-                $reader.DiscardBufferedData()
-                $responseBody = $reader.ReadToEnd();
-                Write-Host "Response content:`n$responseBody" -f Red
-                Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-                write-host
-                
-            
-                }
-            
+                catch {}
+           
 }
 
 #################################################################################################  
@@ -961,32 +912,25 @@ Function Get-ManagedAppProtectionAndroid(){
     )
     $graphApiVersion = "Beta"
     
-        try {
             $Resource = "deviceAppManagement/androidManagedAppProtections"
-        
+        try {
             if($id){
             
                 $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource('$id')"
-                (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get)
+                (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
         
                 }
         
                 else {
         
                     $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
-                    Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get  
+                    Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject  
         
                 }
-                
+            }
+            catch {}        
         
-                 
         
-        }
-    
-        catch {
-        
-
-        }
     
 }
 
@@ -1011,34 +955,24 @@ Function Get-ManagedAppProtectionIOS(){
 
     $graphApiVersion = "Beta"
     
-        try {
-        
-                   
                 $Resource = "deviceAppManagement/iOSManagedAppProtections"
-        
+        try {
                 if($id){
             
                     $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource('$id')"
-                    (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get)
+                    (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
             
                     }
             
                     else {
             
                         $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
-                        Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get  
+                        Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject
             
                     }
+                }
+                catch {}
         
-        }
-    
-        catch {
-        
-
-        
-        
-        }
-    
 }
     
 ####################################################
@@ -1065,39 +999,23 @@ Function Get-GraphAADGroups(){
     
     $graphApiVersion = "beta"
     $DCP_resource = "Groups"
-    
-        try {
-    
+    try {
             if($id){
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
-            Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get
+            Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject
     
             }
     
             else {
     
             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$Filter=onPremisesSyncEnabled ne true&`$count=true"
-            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+            #(Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+            Get-MgGroup | Where-Object OnPremisesSyncEnabled -NE true
     
             }
-    
         }
-    
-        catch {
-    
-        $ex = $_.Exception
-        $errorResponse = $ex.Response.GetResponseStream()
-        $reader = New-Object System.IO.StreamReader($errorResponse)
-        $reader.BaseStream.Position = 0
-        $reader.DiscardBufferedData()
-        $responseBody = $reader.ReadToEnd();
-        #Write-Host "Response content:`n$responseBody" -f Red
-        #Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-        #write-host
-        
-    
-        }
+        catch {}
     
 }
 
@@ -1126,39 +1044,22 @@ Function Get-AutoPilotProfile(){
                 
                 $graphApiVersion = "beta"
                 $DCP_resource = "deviceManagement/windowsAutopilotDeploymentProfiles"
-                
-                    try {
-                
+                try {
                         if($id){
                 
                         $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$filter=id eq '$id'"
-                        (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+                        (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
                 
                         }
                 
                         else {
                 
                         $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-                        (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+                        (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
                 
                         }
-                
                     }
-                
-                    catch {
-                
-                    $ex = $_.Exception
-                    $errorResponse = $ex.Response.GetResponseStream()
-                    $reader = New-Object System.IO.StreamReader($errorResponse)
-                    $reader.BaseStream.Position = 0
-                    $reader.DiscardBufferedData()
-                    $responseBody = $reader.ReadToEnd();
-                    Write-Host "Response content:`n$responseBody" -f Red
-                    Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-                    write-host
-                    
-                
-                    }
+                    catch {}
                 
 }
 
@@ -1187,40 +1088,22 @@ Function Get-AutoPilotESP(){
                     
                     $graphApiVersion = "beta"
                     $DCP_resource = "deviceManagement/deviceEnrollmentConfigurations"
-                    
-                        try {
-                    
+                    try {
                             if($id){
                     
                             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)?`$filter=id eq '$id'"
-                            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).value
+                            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
                     
                             }
                     
                             else {
                     
                             $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-                            (Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value
+                            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
                     
                             }
-                    
                         }
-                    
-                        catch {
-                    
-                        $ex = $_.Exception
-                        $errorResponse = $ex.Response.GetResponseStream()
-                        $reader = New-Object System.IO.StreamReader($errorResponse)
-                        $reader.BaseStream.Position = 0
-                        $reader.DiscardBufferedData()
-                        $responseBody = $reader.ReadToEnd();
-                        Write-Host "Response content:`n$responseBody" -f Red
-                        Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-                        write-host
-                        
-                    
-                        }
-                    
+                        catch{}
 }
                 
 #################################################################################################    
@@ -1252,12 +1135,10 @@ Function Get-DecryptedDeviceConfigurationPolicy(){
         if ($dcp.'@odata.type' -eq "#microsoft.graph.windows10CustomConfiguration") {
             # Convert policy of type windows10CustomConfiguration
             foreach ($omaSetting in $dcp.omaSettings) {
-                try {
-
                     if ($omaSetting.isEncrypted -eq $true) {
                         $DCP_resource_function = "$($DCP_resource)/$($dcp.id)/getOmaSettingPlainTextValue(secretReferenceValueId='$($omaSetting.secretReferenceValueId)')"
                         $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource_function)"
-                        $value = ((Invoke-RestMethod -Uri $uri -Headers $authToken -Method Get).Value)
+                        $value = ((Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value)
 
                         #Remove any unnecessary properties
                         $omaSetting.PsObject.Properties.Remove("isEncrypted")
@@ -1265,26 +1146,2077 @@ Function Get-DecryptedDeviceConfigurationPolicy(){
                         $omaSetting.value = $value
                     }
 
-                }            
-                catch {
-            
-                    $ex = $_.Exception
-                    $errorResponse = $ex.Response.GetResponseStream()
-                    $reader = New-Object System.IO.StreamReader($errorResponse)
-                    $reader.BaseStream.Position = 0
-                    $reader.DiscardBufferedData()
-                    $responseBody = $reader.ReadToEnd();
-                    Write-Host "Response content:`n$responseBody" -f Red
-                    Write-Error "Request to $Uri failed with HTTP Status $($ex.Response.StatusCode) $($ex.Response.StatusDescription)"
-                    write-host
-                    break
-                
-                }
             }
         }
     
     $dcp
 
+}
+
+Function Get-Win365UserSettings(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Windows 365 User Settings Policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device scriptsWindows 365 User Settings Policies
+    .EXAMPLE
+    Get-Win365UserSettings
+    Returns any Windows 365 User Settings Policies configured in Intune
+    .NOTES
+    NAME: Get-Win365UserSettings
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/virtualEndpoint/userSettings"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+Function Get-Win365ProvisioningPolicies(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Windows 365 Provisioning Policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device scriptsWindows 365 Provisioning Policies
+    .EXAMPLE
+    Get-Win365ProvisioningPolicies
+    Returns any Windows 365 Provisioning Policies configured in Intune
+    .NOTES
+    NAME: Get-Win365ProvisioningPolicies
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/virtualEndpoint/provisioningPolicies"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+Function Get-IntunePolicySets(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune policy sets from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune policy sets
+    .EXAMPLE
+    Get-IntunePolicySets
+    Returns any policy sets configured in Intune
+    .NOTES
+    NAME: Get-IntunePolicySets
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceAppManagement/policySets"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$($id)?`$expand=items"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+Function Get-EnrollmentConfigurations(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune enrollment configurations from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune enrollment configurations
+    .EXAMPLE
+    Get-EnrollmentConfigurations
+    Returns any enrollment configurations configured in Intune
+    .NOTES
+    NAME: Get-EnrollmentConfigurations
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/deviceEnrollmentConfigurations"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+    
+
+Function Get-DeviceCategories(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune device categories from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune device categories
+    .EXAMPLE
+    Get-DeviceCategories
+    Returns any device categories configured in Intune
+    .NOTES
+    NAME: Get-DeviceCategories
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/deviceCategories"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+
+Function Get-DeviceFilters(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune device filters from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune device filters
+    .EXAMPLE
+    Get-DeviceFilters
+    Returns any device filters configured in Intune
+    .NOTES
+    NAME: Get-DeviceFilters
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/assignmentFilters"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+
+Function Get-BrandingProfiles(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune Branding Profiles from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune Branding Profiles
+    .EXAMPLE
+    Get-BrandingProfiles
+    Returns any Branding Profiles configured in Intune
+    .NOTES
+    NAME: Get-BrandingProfiles
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/intuneBrandingProfiles"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+
+Function Get-AdminApprovals(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune admin approvals from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune admin approvals
+    .EXAMPLE
+    Get-AdminApprovals
+    Returns any admin approvals configured in Intune
+    .NOTES
+    NAME: Get-AdminApprovals
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/operationApprovalPolicies"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+Function Get-OrgMessages(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune organizational messages from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune organizational messages
+    .EXAMPLE
+    Get-OrgMessages
+    Returns any organizational messages configured in Intune
+    .NOTES
+    NAME: Get-OrgMessages
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/organizationalMessageDetails"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+
+Function Get-IntuneTerms(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune terms and conditions from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune terms and conditions
+    .EXAMPLE
+    Get-IntuneTerms
+    Returns any terms and conditions configured in Intune
+    .NOTES
+    NAME: Get-IntuneTerms
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/termsAndConditions"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+Function Get-IntuneRoles(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune custom roles from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune custom roles
+    .EXAMPLE
+    Get-IntuneRoles
+    Returns any custom roles configured in Intune
+    .NOTES
+    NAME: Get-IntuneRoles
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/roleDefinitions"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value | where-object isBuiltIn -eq $False
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+Function Get-WHfBPolicies(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune Windows Hello for Business policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune WHfB Policies
+    .EXAMPLE
+    Get-WHfBPolicies
+    Returns any WHfB Policies configured in Intune
+    .NOTES
+    NAME: Get-WHfBPolicies
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $id
+    )
+    
+    $graphApiVersion = "beta"
+    $DCP_resource = "deviceManagement/deviceEnrollmentConfigurations"
+    try {
+            if($id){
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)/$id"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject)
+    
+            }
+    
+            else {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
+            (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value | where-object deviceEnrollmentConfigurationType -eq "WindowsHelloForBusiness"
+    
+            }
+        }
+        catch {}
+    
+   
+}
+
+Function Get-WHfBPoliciesbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune Windows Hello for Business policies from the Graph API REST interface by name
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune WHfB Policies
+    .EXAMPLE
+    Get-WHfBPoliciesbyName
+    Returns any WHfB Policies configured in Intune
+    .NOTES
+    NAME: Get-WHfBPoliciesbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/deviceEnrollmentConfigurations"
+    try {
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource/$($DCP_resource)"
+        $allpolicies = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value | where-object deviceEnrollmentConfigurationType -eq "WindowsHelloForBusiness"
+        $app = $allpolicies | Where-Object DisplayName -eq $name
+
+
+    }
+
+    catch {
+
+    }
+    $myid = $app.id
+    if ($null -ne $myid) {
+    $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+    $type = "Winget Application"
+    }
+    else {
+        $fulluri = ""
+        $type = ""
+    }
+    $output = "" | Select-Object -Property id,fulluri, type    
+    $output.id = $myid
+    $output.fulluri = $fulluri
+    $output.type = $type
+    return $output
+   
+}
+
+
+Function Get-IntuneApplicationbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get applications from the Graph API REST interface by name
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any applications added
+    .EXAMPLE
+    Get-IntuneApplicationbyName
+    Returns any applications configured in Intune
+    .NOTES
+    NAME: Get-IntuneApplicationbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "Beta"
+    $Resource = "deviceAppManagement/mobileApps"
+    
+        try {
+    
+            $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayname eq '$name'"
+            $app = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value | Where-Object { ($_.'@odata.type').Contains("#microsoft.graph.winGetApp") }
+    
+    
+        }
+    
+        catch {
+    
+        }
+        $myid = $app.id
+        if ($null -ne $myid) {
+        $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+        $type = "Winget Application"
+        }
+        else {
+            $fulluri = ""
+            $type = ""
+        }
+        $output = "" | Select-Object -Property id,fulluri, type    
+        $output.id = $myid
+        $output.fulluri = $fulluri
+        $output.type = $type
+        return $output
+    }
+
+
+
+Function Get-DeviceConfigurationPolicyGPbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device configuration policies from the Graph API REST interface - Group Policies
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device configuration policies
+    .EXAMPLE
+    Get-DeviceConfigurationPolicyGPbyName
+    Returns any device configuration policies configured in Intune
+    .NOTES
+    NAME: Get-DeviceConfigurationPolicyGPbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/groupPolicyConfigurations"
+    
+    try {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayname eq '$name'"
+        $GP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+
+        }
+        catch {}
+        $myid = $GP.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Group Policy Configuration"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    
+}
+
+
+#############################################################################################################    
+
+Function Get-ConditionalAccessPolicybyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get conditional access policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any conditional access policies
+    .EXAMPLE
+    Get-ConditionalAccessPolicybyName
+    Returns any conditional access policies in Azure
+    .NOTES
+    NAME: Get-ConditionalAccessPolicybyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+
+    $graphApiVersion = "beta"
+    $Resource = "identity/conditionalAccess/policies"
+    
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayname eq '$name'"
+        $CA = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $CA.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Conditional Access"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    
+     
+}
+
+####################################################
+
+Function Get-DeviceConfigurationPolicybyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device configuration policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device configuration policies
+    .EXAMPLE
+    Get-DeviceConfigurationPolicybyName
+    Returns any device configuration policies configured in Intune
+    .NOTES
+    NAME: Get-DeviceConfigurationPolicybyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/deviceConfigurations"
+    
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayname eq '$name'"
+        $DC = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $DC.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Configuration Policy"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    }
+    
+    
+Function Get-DeviceConfigurationPolicySCbyName(){
+    
+            <#
+            .SYNOPSIS
+            This function is used to get device configuration policies from the Graph API REST interface - SETTINGS CATALOG
+            .DESCRIPTION
+            The function connects to the Graph API Interface and gets any device configuration policies
+            .EXAMPLE
+            Get-DeviceConfigurationPolicySCbyName
+            Returns any device configuration policies configured in Intune
+            .NOTES
+            NAME: Get-DeviceConfigurationPolicySCbyName
+            #>
+            
+            [cmdletbinding()]
+            
+            param
+            (
+                $name
+            )
+            
+            $graphApiVersion = "beta"
+            $Resource = "deviceManagement/configurationPolicies"
+            try {
+
+    
+                $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=name eq '$name'"
+                $SC = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+            
+                }
+                catch {}
+                $myid = $SC.id
+                if ($null -ne $myid) {
+                    $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+                    $type = "Settings Catalog"
+                    }
+                    else {
+                        $fulluri = ""
+                        $type = ""
+                    }
+                    $output = "" | Select-Object -Property id,fulluri, type    
+                    $output.id = $myid
+                    $output.fulluri = $fulluri
+                    $output.type = $type
+                    return $output
+                                
+}
+            
+################################################################################################
+
+
+####################################################
+    
+Function Get-DeviceProactiveRemediationsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device proactive remediations from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device proactive remediations
+    .EXAMPLE
+    Get-DeviceProactiveRemediationsbyName
+    Returns any device proactive remediations configured in Intune
+    .NOTES
+    NAME: Get-DeviceProactiveRemediationsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/devicehealthscripts"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $PR = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $PR.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Proactive Remediation"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    
+}
+    
+################################################################################################
+    
+Function Get-DeviceCompliancePolicybyName(){
+    
+            <#
+            .SYNOPSIS
+            This function is used to get device compliance policies from the Graph API REST interface
+            .DESCRIPTION
+            The function connects to the Graph API Interface and gets any device compliance policies
+            .EXAMPLE
+            Get-DeviceCompliancePolicybyName
+            Returns any device compliance policies configured in Intune
+            .NOTES
+            NAME: Get-DeviceCompliancePolicybyName
+            #>
+            
+            [cmdletbinding()]
+            
+            param
+            (
+                $name
+            )
+            
+            $graphApiVersion = "beta"
+            $Resource = "deviceManagement/deviceCompliancePolicies"
+            try {
+
+    
+                $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+                $CP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+            
+                }
+                catch {}
+                $myid = $CP.id
+                if ($null -ne $myid) {
+                    $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+                    $type = "Compliance Policy"
+                    }
+                    else {
+                        $fulluri = ""
+                        $type = ""
+                    }
+                    $output = "" | Select-Object -Property id,fulluri, type    
+                    $output.id = $myid
+                    $output.fulluri = $fulluri
+                    $output.type = $type
+                    return $output
+                                
+}
+
+Function Get-DeviceCompliancePolicyScriptsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device compliance policy scripts from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device compliance policies
+    .EXAMPLE
+    Get-DeviceCompliancePolicyScriptsbyName
+    Returns any device compliance policy scripts configured in Intune
+    .NOTES
+    NAME: Get-DeviceCompliancePolicyScriptsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/deviceComplianceScripts"
+    try {
+
+
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $CP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $CP.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Compliance Policy Script"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+                        
+}
+            
+#################################################################################################
+Function Get-DeviceSecurityPolicybyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device security policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device security policies
+    .EXAMPLE
+    Get-DeviceSecurityPolicybyName
+    Returns any device compliance policies configured in Intune
+    .NOTES
+    NAME: Get-DeviceSecurityPolicybyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/intents"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $SP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $SP.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Security Policy"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    
+}
+
+#################################################################################################  
+
+Function Get-ManagedAppProtectionAndroidbyName(){
+
+    <#
+    .SYNOPSIS
+    This function is used to get managed app protection configuration from the Graph API REST interface Android
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any managed app protection policy Android
+    .EXAMPLE
+    Get-ManagedAppProtectionAndroidbyName
+    .NOTES
+    NAME: Get-ManagedAppProtectionAndroidbyName
+    #>
+    
+    param
+    (
+        $name
+    )
+    $graphApiVersion = "Beta"
+     $Resource = "deviceAppManagement/androidManagedAppProtections"
+            try {
+
+    
+                $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+                $AAP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+            
+                }
+                catch {}
+                $myid = $AAP.id
+                if ($null -ne $myid) {
+                    $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+                    $type = "Android App Protection Policy"
+                    }
+                    else {
+                        $fulluri = ""
+                        $type = ""
+                    }
+                    $output = "" | Select-Object -Property id,fulluri, type    
+                    $output.id = $myid
+                    $output.fulluri = $fulluri
+                    $output.type = $type
+                    return $output
+                        
+}
+
+#################################################################################################  
+
+Function Get-ManagedAppProtectionIOSbyName(){
+
+    <#
+    .SYNOPSIS
+    This function is used to get managed app protection configuration from the Graph API REST interface IOS
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any managed app protection policy IOS
+    .EXAMPLE
+    Get-ManagedAppProtectionIOSbyName
+    .NOTES
+    NAME: Get-ManagedAppProtectionIOSbyName
+    #>
+    param
+    (
+        $name
+    )
+
+    $graphApiVersion = "Beta"
+    
+                $Resource = "deviceAppManagement/iOSManagedAppProtections"
+                try {
+
+    
+                    $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+                    $IAP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+                
+                    }
+                    catch {}
+                    $myid = $IAP.id
+                    if ($null -ne $myid) {
+                        $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+                        $type = "iOS App Protection Policy"
+                        }
+                        else {
+                            $fulluri = ""
+                            $type = ""
+                        }
+                        $output = "" | Select-Object -Property id,fulluri, type    
+                        $output.id = $myid
+                        $output.fulluri = $fulluri
+                        $output.type = $type
+                        return $output
+                    }
+    
+Function Get-AutoPilotProfilebyName(){
+    
+                <#
+                .SYNOPSIS
+                This function is used to get autopilot profiles from the Graph API REST interface 
+                .DESCRIPTION
+                The function connects to the Graph API Interface and gets any autopilot profiles
+                .EXAMPLE
+                Get-AutoPilotProfilebyName
+                Returns any autopilot profiles configured in Intune
+                .NOTES
+                NAME: Get-AutoPilotProfilebyName
+                #>
+                
+                [cmdletbinding()]
+                
+                param
+                (
+                    $name
+                )
+                
+                $graphApiVersion = "beta"
+                $Resource = "deviceManagement/windowsAutopilotDeploymentProfiles"
+                try {
+
+    
+                    $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+                    $AP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+                
+                    }
+                    catch {}
+                    $myid = $AP.id
+                    if ($null -ne $myid) {
+                        $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+                        $type = "Autopilot Profile"
+                        }
+                        else {
+                            $fulluri = ""
+                            $type = ""
+                        }
+                        $output = "" | Select-Object -Property id,fulluri, type    
+                        $output.id = $myid
+                        $output.fulluri = $fulluri
+                        $output.type = $type
+                        return $output
+                                
+}
+
+#################################################################################################
+
+Function Get-AutoPilotESPbyName(){
+    
+                    <#
+                    .SYNOPSIS
+                    This function is used to get autopilot ESP from the Graph API REST interface 
+                    .DESCRIPTION
+                    The function connects to the Graph API Interface and gets any autopilot ESP
+                    .EXAMPLE
+                    Get-AutoPilotESPbyName
+                    Returns any autopilot ESPs configured in Intune
+                    .NOTES
+                    NAME: Get-AutoPilotESPbyName
+                    #>
+                    
+                    [cmdletbinding()]
+                    
+                    param
+                    (
+                        $name
+                    )
+                    
+                    $graphApiVersion = "beta"
+                    $Resource = "deviceManagement/deviceEnrollmentConfigurations"
+                    try {
+
+    
+                        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+                        $ESP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+                    
+                        }
+                        catch {}
+                        $myid = $ESP.id
+                        if ($null -ne $myid) {
+                            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+                            $type = "Autopilot ESP"
+                            }
+                            else {
+                                $fulluri = ""
+                                $type = ""
+                            }
+                            $output = "" | Select-Object -Property id,fulluri, type    
+                            $output.id = $myid
+                            $output.fulluri = $fulluri
+                            $output.type = $type
+                            return $output
+                        }
+                
+#################################################################################################    
+
+
+Function Get-DeviceManagementScriptsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get device PowerShell scripts from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device scripts
+    .EXAMPLE
+    Get-DeviceManagementScriptsbyName
+    Returns any device management scripts configured in Intune
+    .NOTES
+    NAME: Get-DeviceManagementScriptsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/devicemanagementscripts"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $Script = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $Script.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "PowerShell Script"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    
+   
+}
+
+Function Get-Win365UserSettingsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Windows 365 User Settings Policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any device scriptsWindows 365 User Settings Policies
+    .EXAMPLE
+    Get-Win365UserSettingsbyName
+    Returns any Windows 365 User Settings Policies configured in Intune
+    .NOTES
+    NAME: Get-Win365UserSettingsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/virtualEndpoint/userSettings"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $W365User = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $W365User.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Win365 User Settings"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+        
+   
+}
+
+Function Get-Win365ProvisioningPoliciesbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Windows 365 Provisioning Policies from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Windows 365 Provisioning Policies
+    .EXAMPLE
+    Get-Win365ProvisioningPoliciesbyName
+    Returns any Windows 365 Provisioning Policies configured in Intune
+    .NOTES
+    NAME: Get-Win365ProvisioningPoliciesbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/virtualEndpoint/provisioningPolicies"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $W365Prov = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $W365Prov.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "W365 Provisioning Policy"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+       
+}
+
+Function Get-IntunePolicySetsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune policy sets from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune policy sets
+    .EXAMPLE
+    Get-IntunePolicySetsbyName
+    Returns any policy sets configured in Intune
+    .NOTES
+    NAME: Get-IntunePolicySetsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceAppManagement/policySets"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $Policyset = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $Policyset.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Policy Set"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+       
+}
+
+Function Get-EnrollmentConfigurationsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune enrollment configurations from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune enrollment configurations
+    .EXAMPLE
+    Get-EnrollmentConfigurationsbyName
+    Returns any enrollment configurations configured in Intune
+    .NOTES
+    NAME: Get-EnrollmentConfigurationsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/deviceEnrollmentConfigurations"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $EC = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $EC.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Enrollment Configuration"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+          
+}
+    
+
+Function Get-DeviceCategoriesbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune device categories from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune device categories
+    .EXAMPLE
+    Get-DeviceCategoriesbyName
+    Returns any device categories configured in Intune
+    .NOTES
+    NAME: Get-DeviceCategoriesbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/deviceCategories"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $DC = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $DC.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Device Category"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    }
+
+
+Function Get-DeviceFiltersbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune device filters from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune device filters
+    .EXAMPLE
+    Get-DeviceFiltersbyName
+    Returns any device filters configured in Intune
+    .NOTES
+    NAME: Get-DeviceFiltersbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/assignmentFilters"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $DF = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $DF.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Device Filter"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+    }
+
+
+Function Get-BrandingProfilesbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune Branding Profiles from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune Branding Profiles
+    .EXAMPLE
+    Get-BrandingProfilesbyName
+    Returns any Branding Profiles configured in Intune
+    .NOTES
+    NAME: Get-BrandingProfilesbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/intuneBrandingProfiles"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $BP = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $BP.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Branding Profile"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+        
+   
+}
+
+
+Function Get-AdminApprovalsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune admin approvals from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune admin approvals
+    .EXAMPLE
+    Get-AdminApprovalsbyName
+    Returns any admin approvals configured in Intune
+    .NOTES
+    NAME: Get-AdminApprovalsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/operationApprovalPolicies"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $AdminAp = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $AdminAp.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Admin Approval"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+       
+}
+
+Function Get-OrgMessagesbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune organizational messages from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune organizational messages
+    .EXAMPLE
+    Get-OrgMessagesbyName
+    Returns any organizational messages configured in Intune
+    .NOTES
+    NAME: Get-OrgMessagesbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/organizationalMessageDetails"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $OM = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $OM.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Organization Message"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+       
+}
+
+
+Function Get-IntuneTermsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune terms and conditions from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune terms and conditions
+    .EXAMPLE
+    Get-IntuneTermsbyName
+    Returns any terms and conditions configured in Intune
+    .NOTES
+    NAME: Get-IntuneTermsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/termsAndConditions"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $Terms = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $Terms.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Terms and Conditions"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+        
+   
+}
+
+Function Get-IntuneRolesbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get Intune custom roles from the Graph API REST interface
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any Intune custom roles
+    .EXAMPLE
+    Get-IntuneRolesbyName
+    Returns any custom roles configured in Intune
+    .NOTES
+    NAME: Get-IntuneRolesbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "deviceManagement/roleDefinitions"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $Roles = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $Roles.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "Custom Role"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+        
+   
+}
+################################################################################################
+####################################################
+Function Get-GraphAADGroupsbyName(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to get AAD Groups from the Graph API REST interface 
+    .DESCRIPTION
+    The function connects to the Graph API Interface and gets any AAD Groups
+    .EXAMPLE
+    Get-GraphAADGroupsbyName
+    Returns any AAD Groups
+    .NOTES
+    NAME: Get-GraphAADGroupsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+    
+    $graphApiVersion = "beta"
+    $Resource = "Groups"
+    try {
+
+    
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)?`$filter=displayName eq '$name'"
+        $AAD = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).Value
+    
+        }
+        catch {}
+        $myid = $AAD.id
+        if ($null -ne $myid) {
+            $fulluri = "https://graph.microsoft.com/$graphApiVersion/$($Resource)/$myid"
+            $type = "AAD Group"
+            }
+            else {
+                $fulluri = ""
+                $type = ""
+            }
+            $output = "" | Select-Object -Property id,fulluri, type    
+            $output.id = $myid
+            $output.fulluri = $fulluri
+            $output.type = $type
+            return $output
+        
+}
+
+#################################################################################################  
+function Get-DetailsbyName () {
+    <#
+    .SYNOPSIS
+    This function is used to get  ID and URI from only the name
+    .DESCRIPTION
+    This function is used to get  ID and URI from only the name
+    .EXAMPLE
+    Get-DetailsbyName
+    Returns ID and full URI
+    .NOTES
+    NAME: Get-DetailsbyName
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $name
+    )
+
+    $id = ""
+    while ($id -eq "") {
+$check = Get-DeviceConfigurationPolicybyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceConfigurationPolicySCbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceCompliancePolicybyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceCompliancePolicyscriptsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceSecurityPolicybyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-AutoPilotProfilebyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-AutoPilotESPbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-ManagedAppProtectionAndroidbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-ManagedAppProtectioniosbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceConfigurationPolicyGPbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-ConditionalAccessPolicybyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceProactiveRemediationsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-GraphAADGroupsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-IntuneApplicationbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceManagementScriptsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-Win365UserSettingsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-Win365ProvisioningPoliciesbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-IntunePolicySetsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-EnrollmentConfigurationsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceCategoriesbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-DeviceFiltersbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-BrandingProfilesbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-AdminApprovalsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+#$orgmessages = Get-OrgMessages -id $id
+$check = Get-IntuneTermsbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-WHfBPoliciesbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+$check = Get-IntuneRolesbyName -name $name
+if ($null -ne $check.id) {
+    $id = $check.id
+    $uri = $check.fulluri
+    $type = $check.type
+    break
+}
+    }
+    $output = "" | Select-Object -Property id,uri, type    
+        $output.id = $id
+        $output.uri = $uri
+        $output.type = $type
+        return $output
 }
 
 #################################################################################################
@@ -1305,6 +3237,7 @@ function getpolicyjson() {
         $resource,
         $policyid
     )
+    $id = $policyid
     write-host $resource
     $graphApiVersion = "beta"
     switch ($resource) {
@@ -1319,7 +3252,7 @@ function getpolicyjson() {
              ##Remove settings which break Custom OMA-URI
         
              $policyconvert = $policy.omaSettings
-             if ($policyconvert -ne "") {
+             if ($null -ne $policyconvert) {
              $policyconvert = $policyconvert | Select-Object -Property * -ExcludeProperty isEncrypted, secretReferenceValueId
              foreach ($pvalue in $policyconvert) {
              $unencoded = $pvalue.value
@@ -1389,15 +3322,68 @@ function getpolicyjson() {
                }
            }
        }
-    
+
+       "deviceManagement/devicemanagementscripts" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-DeviceManagementScripts -id $id
+        $oldname = $policy.DisplayName
+        $newname = "Copy of " + $oldname
+        $policy.displayName = $newname
+            # Set SupportsScopeTags to $false, because $true currently returns an HTTP Status 400 Bad Request error.
+       if ($policy.supportsScopeTags) {
+           $policy.supportsScopeTags = $false
+       }
+   
+           $policy.PSObject.Properties | Foreach-Object {
+               if ($null -ne $_.Value) {
+                   if ($_.Value.GetType().Name -eq "DateTime") {
+                       $_.Value = (Get-Date -Date $_.Value -Format s) + "Z"
+                   }
+               }
+           }
+       }
+       "deviceManagement/deviceComplianceScripts" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-DeviceCompliancePolicyScripts -id $id
+        $oldname = $policy.displayName
+        if ($changename -eq "yes") {
+            $newname = "Copy of " + $oldname
+        }
+        else {
+            $newname = $oldname
+        }        $policy.displayName = $newname
+            # Set SupportsScopeTags to $false, because $true currently returns an HTTP Status 400 Bad Request error.
+       if ($policy.supportsScopeTags) {
+           $policy.supportsScopeTags = $false
+       }
+   
+           $policy.PSObject.Properties | Foreach-Object {
+               if ($null -ne $_.Value) {
+                   if ($_.Value.GetType().Name -eq "DateTime") {
+                       $_.Value = (Get-Date -Date $_.Value -Format s) + "Z"
+                   }
+               }
+           }
+       }
 
     "deviceManagement/configurationPolicies" {
         $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
         $policy = Get-DeviceConfigurationPolicysc -id $id
         $policy | Add-Member -MemberType NoteProperty -Name 'settings' -Value @() -Force
         #$settings = Invoke-MSGraphRequest -HttpMethod GET -Url "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$id/settings" | Get-MSGraphAllPages
-        $settings = Invoke-RestMethod -headers $authToken -method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$id/settings" | Get-MSGraphAllPages
+        $firstSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/configurationPolicies/$id/settings" -OutputType PSObject
+        $settings = $firstSettings.value
+        $policynextlink = $firstSettings."@odata.nextlink"
+        #$policynextlink = $policynextlink -replace '\S', ''
+        while (($policynextlink -ne "") -and ($null -ne $policynextlink))
+        {
+            $nextsettings = (Invoke-MgGraphRequest -Uri $policynextlink -Method GET -OutputType PSObject)
+            $policynextlink = $nextsettings."@odata.nextLink"
+            #$policynextlink = $policynextlink -replace '\S', ''
+            $settings += $nextsettings.value
+        }
 
+        $settings =  $settings | select-object * -ExcludeProperty '@odata.count'
         if ($settings -isnot [System.Array]) {
             $policy.Settings = @($settings)
         } else {
@@ -1438,9 +3424,17 @@ function getpolicyjson() {
         $policy = Get-DeviceSecurityPolicy -id $id
         $templateid = $policy.templateID
         $uri = "https://graph.microsoft.com/beta/deviceManagement/templates/$templateId/createInstance"
-        $template = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/templates/$templateid" -Headers $authToken -Method Get
-        $templateCategory = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/templates/$templateid/categories" -Headers $authToken -Method Get | Get-MSGraphAllPages
-        $intentSettingsDelta = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/intents/$id/categories/$($templateCategory.id)/settings" -Headers $authToken -Method Get).value
+        #$template = Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/templates/$templateid" -Headers $authToken -Method Get
+        $template = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/templates/$templateid" -OutputType PSObject
+        $template = $template
+        $templateCategories = (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/templates/$templateid/categories" -OutputType PSObject).Value
+        #$intentSettingsDelta = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/intents/$id/categories/$($templateCategory.id)/settings" -Headers $authToken -Method Get).value
+        $intentSettingsDelta = @()
+        foreach ($templateCategory in $templateCategories) {
+            # Get all configured values for the template categories
+            Write-Verbose "Requesting Intent Setting Values"
+            $intentSettingsDelta += (Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/intents/$($policy.id)/categories/$($templateCategory.id)/settings").value
+        }
         $oldname = $policy.displayName
         $newname = "Copy Of " + $oldname
         $policy = @{
@@ -1469,16 +3463,31 @@ function getpolicyjson() {
         $policy.displayName = $newname
         $policy = $policy | Select-Object description, DisplayName, groupTypes, mailEnabled, mailNickname, securityEnabled, isAssignabletoRole, membershiprule, MembershipRuleProcessingState
     }
-    "deviceManagement/deviceEnrollmentConfigurations" {
-        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+    "deviceManagement/deviceEnrollmentConfigurationsESP" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/deviceEnrollmentConfigurations"
         $policy = Get-AutoPilotESP -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
+    "deviceManagement/virtualEndpoint/userSettings" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-Win365UserSettings -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
+    "deviceManagement/virtualEndpoint/provisioningPolicies" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-Win365ProvisioningPolicies -id $id
         $oldname = $policy.displayName
         $newname = "Copy Of " + $oldname
         $policy.displayName = $newname
     }
     "deviceAppManagement/managedAppPoliciesandroid" {
         $uri = "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies"
-        $policy = Invoke-RestMethod -Uri "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies('$id')" -Headers $authToken -Method Get
+        #$policy = Invoke-RestMethod -Uri "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies('$id')" -Headers $authToken -Method Get
+        $policy = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies('$id')" -OutputType PSObject
         $oldname = $policy.displayName
         $newname = "Copy Of " + $oldname
         $policy.displayName = $newname
@@ -1499,7 +3508,8 @@ function getpolicyjson() {
     }
     "deviceAppManagement/managedAppPoliciesios" {
         $uri = "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies"
-        $policy = Invoke-RestMethod -Uri "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies('$id')" -Headers $authToken -Method Get
+        #$policy = Invoke-RestMethod -Uri "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies('$id')" -Headers $authToken -Method Get
+        $policy = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/managedAppPolicies('$id')" -OutputType PSObject
         $oldname = $policy.displayName
         $newname = "Copy Of " + $oldname
         $policy.displayName = $newname
@@ -1523,16 +3533,106 @@ function getpolicyjson() {
         $uri = "conditionalaccess"
         $policy = Get-ConditionalAccessPolicy -id $id
     }
+    "deviceAppManagement/mobileApps" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/deviceAppManagement/mobileApps"
+        $policy = Get-IntuneApplication -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy of " + $oldname
+        $policy.displayName = $newname
+        $policy = $policy | Select-Object * -ExcludeProperty uploadState, publishingState, isAssigned, dependentAppCount, supersedingAppCount, supersededAppCount
+    }
+    "deviceAppManagement/policySets" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-IntunePolicySets -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+        $policyitems = $policy.items | select-object * -ExcludeProperty createdDateTime, lastModifiedDateTime, id, itemType, displayName, status, errorcode, priority, targetedAppManagementLevels
+        $policy.items = $policyitems
+        $policy = $policy | Select-Object * -ExcludeProperty '@odata.context', status, errorcode, 'items@odata.context'
+    }
+    "deviceManagement/deviceEnrollmentConfigurations" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-EnrollmentConfigurations -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
+    "deviceManagement/deviceEnrollmentConfigurationswhfb" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/deviceManagement/deviceEnrollmentConfigurations"
+        $policy = Get-WHfBPolicies -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
+    "deviceManagement/deviceCategories" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-DeviceCategories -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
+    "deviceManagement/assignmentFilters" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-DeviceFilters -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+        $policy = $policy | Select-Object * -ExcludeProperty Payloads
+    }
+    "deviceManagement/intuneBrandingProfiles" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-BrandingProfiles -id $id
+        $oldname = $policy.profileName
+        $newname = "Copy Of " + $oldname
+        $policy.profileName = $newname
+    }
+    "deviceManagement/operationApprovalPolicies" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-AdminApprovals -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
+    "deviceManagement/organizationalMessageDetails" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-OrgMessages -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
+    "deviceManagement/termsAndConditions" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-IntuneTerms -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+        $policy = $policy | Select-Object * -ExcludeProperty modifiedDateTime
+    }
+    "deviceManagement/roleDefinitions" {
+        $uri = "https://graph.microsoft.com/$graphApiVersion/$Resource"
+        $policy = Get-IntuneRoles -id $id
+        $oldname = $policy.displayName
+        $newname = "Copy Of " + $oldname
+        $policy.displayName = $newname
+    }
     }
 
     ##We don't want to convert CA policy to JSON
-    if ($resource -eq "conditionalaccess")  {
+    if (($resource -eq "conditionalaccess")) {
         $policy = $policy
     }
     else {
     # Remove any GUIDs or dates/times to allow Intune to regenerate
-    $policy = $policy | Select-Object * -ExcludeProperty id, createdDateTime, LastmodifieddateTime, version, creationSource | ConvertTo-Json -Depth 100
-    }
+    if ($resource -eq "deviceManagement/termsAndConditions") {
+        ##We need the version number for T&Cs
+        $policy = $policy | Select-Object * -ExcludeProperty id, createdDateTime, LastmodifieddateTime, creationSource, '@odata.count' | ConvertTo-Json -Depth 100
+    
+        }
+        else {
+        $policy = $policy | Select-Object * -ExcludeProperty id, createdDateTime, LastmodifieddateTime, version, creationSource, '@odata.count' | ConvertTo-Json -Depth 100
+        }
+        }
 
     return $policy, $uri
 
@@ -1545,72 +3645,46 @@ function getpolicyjson() {
 ###############################################################################################################
 ######                                          MS Graph Implementations                                 ######
 ###############################################################################################################
-##Get Source Creds
-$credential = Get-Credential -Message "Enter your source tenant details"
-$user = $credential.username
-
-#Authenticate for MS Graph
-#region Authentication
-
-
-# Checking if authToken exists before running authentication
-if($global:authToken){
-
-    # Setting DateTime to Universal time to work in all timezones
-    $DateTime = (Get-Date).ToUniversalTime()
-
-    # If the authToken exists checking when it expires
-    $TokenExpires = ($authToken.ExpiresOn.datetime - $DateTime).Minutes
-
-        if($TokenExpires -le 0){
-
-        write-host "Authentication Token expired" $TokenExpires "minutes ago" -ForegroundColor Yellow
-
-            # Defining User Principal Name if not present
-
-            if($User -eq $null -or $User -eq ""){
-
-            $User = Read-Host -Prompt "Please specify your user principal name for Azure Authentication"
-
-            }
-
-        $global:authToken = Get-AuthToken -User $credential.UserName
-
-        }
-}
-
-# Authentication doesn't exist, calling Get-AuthToken function
-
-else {
-
-    if($User -eq $null -or $User -eq ""){
-
-    $User = Read-Host -Prompt "Please specify your user principal name for Azure Authentication"
-    Write-Host
-
+if ($automated -eq "yes") {
+ 
+    $body = @{
+        grant_type="client_credentials";
+        client_id=$clientId;
+        client_secret=$clientSecret;
+        scope="https://graph.microsoft.com/.default";
     }
+     
+    $response = Invoke-RestMethod -Method Post -Uri https://login.microsoftonline.com/$sourcetenant/oauth2/v2.0/token -Body $body
+    $accessToken = $response.access_token
+     
 
-# Getting the authorization token
-
-#$tenant = Read-Host -Prompt "Please specify your source tenant email address"
-$global:authToken = Get-AuthToken -User $credential.UserName
+    Select-MgProfile -Name Beta
+Connect-MgGraph  -AccessToken $accessToken 
+write-host "Graph Connection Established"
+}
+else {
+##Connect to Graph
+Select-MgProfile -Name Beta
+if ($sourcetenantcheck -ne $true) {
+    Connect-MgGraph -Scopes Policy.ReadWrite.ConditionalAccess, CloudPC.ReadWrite.All, DeviceManagementServiceConfig.ReadWrite.All, RoleAssignmentSchedule.ReadWrite.Directory, Domain.Read.All, Domain.ReadWrite.All, Directory.Read.All, Policy.ReadWrite.ConditionalAccess, DeviceManagementApps.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, openid, profile, email, offline_access, DeviceManagementRBAC.Read.All, DeviceManagementRBAC.ReadWrite.All
+}
+else {
+    Connect-MgGraph -TenantId $sourcetenant -Scopes Policy.ReadWrite.ConditionalAccess, CloudPC.ReadWrite.All, DeviceManagementServiceConfig.ReadWrite.All, RoleAssignmentSchedule.ReadWrite.Directory, Domain.Read.All, Domain.ReadWrite.All, Directory.Read.All, Policy.ReadWrite.ConditionalAccess, DeviceManagementApps.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, openid, profile, email, offline_access, DeviceManagementRBAC.Read.All, DeviceManagementRBAC.ReadWrite.All
 
 }
-
-#endregion
-
+}
 
 
 ###############################################################################################################
 ######                                          Grab the Profiles                                        ######
 ###############################################################################################################
-##Connect to Azure AD for Conditional Access Policies
-
-connect-azureAD -Credential $credential
-
-Connect-MSGraph -Credential $credential -PassThru
 $profiles = @()
 $configuration = @()
+
+##Check if any parameters have been passed
+if (($namecheck -ne $true) -and ($idcheck -ne $true)) {
+write-host "No parameters passed, grabbing all profiles"
+
 ##Get Config Policies
 $configuration += Get-DeviceConfigurationPolicy | Select-Object ID, DisplayName, Description, @{N='Type';E={"Config Policy"}}
 
@@ -1619,13 +3693,19 @@ $configuration += Get-DeviceConfigurationPolicyGP | Select-Object ID, DisplayNam
 
 
 ##Get Settings Catalog Policies
-$configuration += Get-DeviceConfigurationPolicySC | Select-Object ID, @{N='DisplayName';E={$_.Name}}, Description , @{N='Type';E={"Settings Catalog"}}
+$configuration += Get-DeviceConfigurationPolicySC | Select-Object @{N='ID';E={$_.id}}, @{N='DisplayName';E={$_.Name}}, @{N='Description';E={$_.Description}} , @{N='Type';E={"Settings Catalog"}}
 
 ##Get Compliance Policies
 $configuration += Get-DeviceCompliancePolicy | Select-Object ID, DisplayName, Description, @{N='Type';E={"Compliance Policy"}}
 
 ##Get Proactive Remediations
 $configuration += Get-DeviceProactiveRemediations | Select-Object ID, DisplayName, Description, @{N='Type';E={"Proactive Remediation"}}
+
+##Get Device Scripts
+$configuration += Get-DeviceManagementScripts | Select-Object ID, DisplayName, Description, @{N='Type';E={"PowerShell Script"}}
+
+##Get Compliance Scripts
+$configuration += Get-DeviceCompliancePolicyScripts | Select-Object ID, DisplayName, Description, @{N='Type';E={"Compliance Script"}}
 
 ##Get Security Policies
 $configuration += Get-DeviceSecurityPolicy | Select-Object ID, DisplayName, Description, @{N='Type';E={"Security Policy"}}
@@ -1650,12 +3730,122 @@ $configuration += $iosapp | Select-Object ID, DisplayName, Description, @{N='Typ
 ##Get Conditional Access Policies
 $configuration += Get-ConditionalAccessPolicy | Select-Object ID, DisplayName, @{N='Type';E={"Conditional Access Policy"}}
 
+##Get Winget Apps
+$configuration += Get-IntuneApplication | Select-Object ID, DisplayName, Description, @{N='Type';E={"Winget Application"}}
 
-$configuration | Out-GridView -PassThru -Title "Select policies to copy" | ForEach-Object {
+##Get Win365 User Settings
+$configuration += Get-Win365UserSettings | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Win365 User Settings"}}
+
+##Get Win365 Provisioning Policies
+$configuration += Get-Win365ProvisioningPolicies | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Win365 Provisioning Policy"}}
+
+
+##Get Intune Policy Sets
+$configuration += Get-IntunePolicySets | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Policy Set"}}
+
+##Get Enrollment Configurations
+$configuration += Get-EnrollmentConfigurations | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Enrollment Configuration"}}
+
+##Get WHfBPolicies
+$configuration += Get-WHfBPolicies | Select-Object ID, DisplayName, Description,  @{N='Type';E={"WHfB Policy"}}
+
+##Get Device Categories
+$configuration += Get-DeviceCategories | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Device Categories"}}
+
+##Get Device Filters
+$configuration += Get-DeviceFilters | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Device Filter"}}
+
+##Get Branding Profiles
+$configuration += Get-BrandingProfiles | Select-Object ID,  @{N='DisplayName';E={$_.profileName}}, Description,  @{N='Type';E={"Branding Profile"}}
+
+##Get Admin Approvals
+$configuration += Get-AdminApprovals | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Admin Approval"}}
+
+##Get Org Messages
+#Note API NOT LIVE YET
+#$configuration += Get-OrgMessages | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Organization Message"}}
+
+##Get Intune Terms
+$configuration += Get-IntuneTerms | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Intune Terms"}}
+
+##Get Intune Roles
+$configuration += Get-IntuneRoles | Select-Object ID, DisplayName, Description,  @{N='Type';E={"Intune Role"}}
+
+##Check if everything set in parameters
+if ($everythingcheck -ne $true) {
+##Display the list of policies
+write-host "No parameters detected, displaying UI"
+$configuration2 = $configuration | Out-GridView -PassThru -Title "Select policies to copy"
+}
+else {
+    ##Grab all policies
+    write-host "Grabbing everything"
+    $configuration2 = $configuration
+}
+
+}
+else {
+$configuration2 = @()
+    ##Parameters passed, check what they are
+    if ($namecheck -eq $true) {
+        ##Name(s) sent, convert to ID and pass-through
+        foreach ($item in $name) {
+            write-host "Getting ID for $name"
+            $policyid = (Get-DetailsbyName -name $item)
+            $id = $policyid.ID
+            write-host "ID is $id"
+            $configuration2 += $policyid
+        }
+    }
+    if ($idcheck -eq $true) {
+        ##ID(s) sent, pass-through
+        foreach ($item in $inputid) {
+            write-host "Copying policy $id"
+            $object = "" | select-object id
+            $object.id = $item
+            $configuration2 += $object
+        }
+
+    }
+}
+$configuration2 | ForEach-Object {
 
 ##Find out what it is
 $id = $_.ID
 write-host $id
+
+##Performance improvement, use existing array instead of additional graph calls
+if (($namecheck -ne $true) -and ($idcheck -ne $true)) {
+$policy = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Config Policy")}
+$catalog = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Settings Catalog")}
+$compliance = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Compliance Policy")}
+$security = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Security Policy")}
+$autopilot = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Autopilot Profile")}
+$esp = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Autopilot ESP")}
+$android = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Android App Protection")}
+$ios = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "iOS App Protection")}
+$gp = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Admin Template")}
+$ca = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Conditional Access Policy")}
+$proac = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Proactive Remediation")}
+$aad = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "AAD Group")}
+$wingetapp = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Winget Application")}
+$scripts = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "PowerShell Script")}
+$compliancescripts = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Compliance Script")}
+$win365usersettings = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Win365 User Settings")}
+$win365provisioning = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Win365 Provisioning Policy")}
+$policysets = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Policy Set")}
+$enrollmentconfigs = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Enrollment Configuration")}
+$devicecategories = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Device Categories")}
+$devicefilters = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Device Filter")}
+$brandingprofiles = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Branding Profile")}
+$adminapprovals = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Admin Approval")}
+$intuneterms = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Intune Terms")}
+$intunerole = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "Intune Role")}
+$whfb = $configuration | where-object {($_.ID -eq $id) -and ($_.Type -eq "WHfB Policy")}
+
+}
+else {
+    
 $policy = Get-DeviceConfigurationPolicy -id $id
 $catalog = Get-DeviceConfigurationPolicysc -id $id
 $compliance = Get-DeviceCompliancePolicy -id $id
@@ -1668,7 +3858,22 @@ $gp = Get-DeviceConfigurationPolicyGP -id $id
 $ca = Get-ConditionalAccessPolicy -id $id
 $proac = Get-DeviceProactiveRemediations -id $id
 $aad = Get-GraphAADGroups -id $id
-
+$wingetapp = Get-IntuneApplication -id $id
+$scripts = Get-DeviceManagementScripts -id $id
+$compliancescripts = Get-DeviceCompliancePolicyScripts -id $id
+$win365usersettings = Get-Win365UserSettings -id $id
+$win365provisioning = Get-Win365ProvisioningPolicies -id $id
+$policysets = Get-IntunePolicySets -id $id
+$enrollmentconfigs = Get-EnrollmentConfigurations -id $id
+$devicecategories = Get-DeviceCategories -id $id
+$devicefilters = Get-DeviceFilters -id $id
+$brandingprofiles = Get-BrandingProfiles -id $id
+$adminapprovals = Get-AdminApprovals -id $id
+#$orgmessages = Get-OrgMessages -id $id
+$intuneterms = Get-IntuneTerms -id $id
+$intunerole = Get-IntuneRoles -id $id
+$whfb = get-whfbpolicy -id $id
+}
 
 
 
@@ -1680,7 +3885,7 @@ write-host "It's a policy"
 $id = $policy.id
 $Resource = "deviceManagement/deviceConfigurations"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $gp) {
@@ -1689,7 +3894,7 @@ write-host "It's an Admin Template"
 $id = $gp.id
 $Resource = "deviceManagement/groupPolicyConfigurations"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 }
 if ($null -ne $catalog) {
     # Settings Catalog Policy
@@ -1697,7 +3902,7 @@ write-host "It's a Settings Catalog"
 $id = $catalog.id
 $Resource = "deviceManagement/configurationPolicies"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $compliance) {
@@ -1706,7 +3911,7 @@ write-host "It's a Compliance Policy"
 $id = $compliance.id
 $Resource = "deviceManagement/deviceCompliancePolicies"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $proac) {
@@ -1715,16 +3920,36 @@ write-host "It's a Proactive Remediation"
 $id = $proac.id
 $Resource = "deviceManagement/devicehealthscripts"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
+
+if ($null -ne $scripts) {
+    # Device Scripts
+    write-host "It's a PowerShell Script"
+$id = $scripts.id
+$Resource = "deviceManagement/devicemanagementscripts"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1],$copypolicy[2], $id))
+}
+
+
+if ($null -ne $compliancescripts) {
+    # Compliance Scripts
+    write-host "It's a Compliance Script"
+$id = $compliancescripts.id
+$Resource = "deviceManagement/deviceComplianceScripts"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1],$copypolicy[2], $id))
+}
+
 if ($null -ne $security) {
     # Security Policy
 write-host "It's a Security Policy"
 $id = $security.id
 $Resource = "deviceManagement/intents"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $autopilot) {
@@ -1733,17 +3958,25 @@ write-host "It's an Autopilot Profile"
 $id = $autopilot.id
 $Resource = "deviceManagement/windowsAutopilotDeploymentProfiles"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $esp) {
     # Autopilot ESP
 write-host "It's an AutoPilot ESP"
 $id = $esp.id
-$Resource = "deviceManagement/deviceEnrollmentConfigurations"
+$Resource = "deviceManagement/deviceEnrollmentConfigurationsESP"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
+}
+if ($null -ne $whfb) {
+    # Windows Hello for Business
+write-output "It's a WHfB Policy"
+$id = $esp.id
+$Resource = "deviceManagement/deviceEnrollmentConfigurationswhfb"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1],$copypolicy[2], $id))
 }
 if ($null -ne $android) {
     # Android App Protection
@@ -1751,7 +3984,7 @@ write-host "It's an Android App Protection Policy"
 $id = $android.id
 $Resource = "deviceAppManagement/managedAppPoliciesandroid"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $ios) {
@@ -1760,7 +3993,7 @@ write-host "It's an iOS App Protection Policy"
 $id = $ios.id
 $Resource = "deviceAppManagement/managedAppPoliciesios"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $aad) {
@@ -1769,7 +4002,7 @@ write-host "It's an AAD Group"
 $id = $aad.id
 $Resource = "groups"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
 }
 if ($null -ne $ca) {
@@ -1778,64 +4011,171 @@ write-host "It's a Conditional Access Policy"
 $id = $ca.id
 $Resource = "ConditionalAccess"
 $copypolicy = getpolicyjson -resource $Resource -policyid $id
-$profiles+= ,(@($copypolicy[0],$copypolicy[1]))
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 
+}
+if ($null -ne $wingetapp) {
+    # Winget App
+write-host "It's a Windows Application"
+$id = $wingetapp.id
+$Resource = "deviceAppManagement/mobileApps"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $win365usersettings) {
+    # W365 User Settings
+write-host "It's a W365 User Setting"
+$id = $win365usersettings.id
+$Resource = "deviceManagement/virtualEndpoint/userSettings"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $win365provisioning) {
+    # W365 Provisioning Policy
+write-host "It's a W365 Provisioning Policy"
+$id = $win365provisioning.id
+$Resource = "deviceManagement/virtualEndpoint/provisioningPolicies"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $policysets) {
+    # Policy Set
+write-host "It's a Policy Set"
+$id = $policysets.id
+$Resource = "deviceAppManagement/policySets"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $enrollmentconfigs) {
+    # Enrollment Config
+write-host "It's an enrollment configuration"
+$id = $enrollmentconfigs.id
+$Resource = "deviceManagement/deviceEnrollmentConfigurations"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $devicecategories) {
+    # Device Categories
+write-host "It's a device category"
+$id = $devicecategories.id
+$Resource = "deviceManagement/deviceCategories"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $devicefilters) {
+    # Device Filter
+write-host "It's a device filter"
+$id = $devicefilters.id
+$Resource = "deviceManagement/assignmentFilters"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $brandingprofiles) {
+    # Branding Profile
+write-host "It's a branding profile"
+$id = $brandingprofiles.id
+$Resource = "deviceManagement/intuneBrandingProfiles"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $adminapprovals) {
+    # Multi-admin approval
+write-host "It's a multi-admin approval"
+$id = $adminapprovals.id
+$Resource = "deviceManagement/operationApprovalPolicies"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+#if ($null -ne $orgmessages) {
+    # Organizational Message
+#write-host "It's an organizational message"
+#$id = $orgmessages.id
+#$Resource = "deviceManagement/organizationalMessageDetails"
+#$copypolicy = getpolicyjson -resource $Resource -policyid $id
+#$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+#}
+if ($null -ne $intuneterms) {
+    # Intune Terms
+write-host "It's a T&C"
+$id = $intuneterms.id
+$Resource = "deviceManagement/termsAndConditions"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
+}
+if ($null -ne $intunerole) {
+    # Intune Role
+write-host "It's a role"
+$id = $intunerole.id
+$Resource = "deviceManagement/roleDefinitions"
+$copypolicy = getpolicyjson -resource $Resource -policyid $id
+$profiles+= ,(@($copypolicy[0],$copypolicy[1], $id))
 }
 }
 
 
         ##Clear Tenant Connections
-Disconnect-AzureAD
-        if ($global:authToken)
-{
-    Clear-Variable -Name authToken -Scope Global
-}
-else{
-    Write-Host "The authtoken is null."
-}
-
-if ($global:authResult)
-{
-    Clear-Variable -Name authResult -Scope Global
-}
-else{
-    Write-Host "The authtoken is null."
-}
+        Disconnect-MgGraph
         
         ##Get new Tenant details
-        #$tenant2 = Read-Host -Prompt "Please specify your destination tenant email address"
-        $destcredential = Get-Credential -Message "Please enter your destination tenant credentials"
-        ##Connect and copy
-        $global:authToken = Get-AuthToken -user $destcredential.UserName
-        Connect-AzureAD -Credential $destcredential
-        Connect-MSGraph -Credential $destcredential
+        write-host "Connecting to destination tenant"
+        if ($automated -eq "yes") {
+ 
+            $body = @{
+                grant_type="client_credentials";
+                client_id=$clientId;
+                client_secret=$clientSecret;
+                scope="https://graph.microsoft.com/.default";
+            }
+             
+            $response = Invoke-RestMethod -Method Post -Uri https://login.microsoftonline.com/$desttenant/oauth2/v2.0/token -Body $body
+            $accessToken = $response.access_token
+             
+            $accessToken
+        
+            Select-MgProfile -Name Beta
+        Connect-MgGraph  -AccessToken $accessToken 
+        write-host "Graph Connection Established"
+        }
+        else {
+        ##Connect to Graph
+        Select-MgProfile -Name Beta
+        if ($desttenantcheck -ne $true) {
+            Connect-MgGraph -Scopes Policy.ReadWrite.ConditionalAccess, CloudPC.ReadWrite.All, DeviceManagementServiceConfig.ReadWrite.All, RoleAssignmentSchedule.ReadWrite.Directory, Domain.Read.All, Domain.ReadWrite.All, Directory.Read.All, Policy.ReadWrite.ConditionalAccess, DeviceManagementApps.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, openid, profile, email, offline_access, DeviceManagementRBAC.Read.All, DeviceManagementRBAC.ReadWrite.All
+        }
+        else {
+            Connect-MgGraph -TenantId $desttenant -Scopes Policy.ReadWrite.ConditionalAccess, CloudPC.ReadWrite.All, DeviceManagementServiceConfig.ReadWrite.All, RoleAssignmentSchedule.ReadWrite.Directory, Domain.Read.All, Domain.ReadWrite.All, Directory.Read.All, Policy.ReadWrite.ConditionalAccess, DeviceManagementApps.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, openid, profile, email, offline_access, DeviceManagementRBAC.Read.All, DeviceManagementRBAC.ReadWrite.All
+        
+        }        }        
 
 
     ##Loop through array and create Profiles
         foreach ($toupload in $profiles) {
             $policyuri =  $toupload[1]
             $policyjson =  $toupload[0]
+            $id = $toupload[2]
             $policy = $policyjson
             ##If policy is conditional access, we need special config
             if ($policyuri -eq "conditionalaccess") {
                 write-host "Creating Conditional Access Policy"
-
+                $uri = "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies"
                 $NewDisplayName = "Copy of " + $Policy.DisplayName
                 $Parameters = @{
-                    DisplayName     = $NewDisplayName
-                    State           = $policy.State
-                    Conditions      = $policy.Conditions
-                    GrantControls   = $policy.GrantControls
-                    SessionControls = $policy.SessionControls
+                    displayName     = $NewDisplayName
+                    state           = $policy.State
+                    conditions      = $policy.Conditions
+                    grantControls   = $policy.GrantControls
+                    sessionControls = $policy.SessionControls
                 }
-            
-               $null = New-AzureADMSConditionalAccessPolicy @Parameters
+                $body = $Parameters | ConvertTo-Json -depth 50
+               $null = Invoke-MgGraphRequest -Method POST -uri $uri -Body $body -ContentType "application/json"
             }
             else {
 
                # Add the policy
             $body = ([System.Text.Encoding]::UTF8.GetBytes($policyjson.tostring()))
-            $copypolicy = Invoke-RestMethod -Uri $policyuri -Headers $authToken -Method Post -Body $body  -ContentType "application/json; charset=utf-8"  
+            #$copypolicy = Invoke-RestMethod -Uri $policyuri -Headers $authToken -Method Post -Body $body  -ContentType "application/json; charset=utf-8"  
+            $copypolicy = Invoke-MgGraphRequest -Uri $policyuri -Method Post -Body $body  -ContentType "application/json; charset=utf-8"
+
 
 
             ##If policy is an admin template, we need to loop through and add the settings
@@ -1849,6 +4189,7 @@ else{
 		                    $DefinitionValuedefinition = Get-GroupPolicyConfigurationsDefinitionValuesdefinition -GroupPolicyConfigurationID $id -GroupPolicyConfigurationsDefinitionValueID $GroupPolicyConfigurationsDefinitionValue.id
 		                    $DefinitionValuedefinitionID = $DefinitionValuedefinition.id
 		                    $DefinitionValuedefinitionDisplayName = $DefinitionValuedefinition.displayName
+                            $DefinitionValuedefinitionDisplayName = $DefinitionValuedefinitionDisplayName
 		                    $GroupPolicyDefinitionsPresentations = Get-GroupPolicyDefinitionsPresentations -groupPolicyDefinitionsID $id -GroupPolicyConfigurationsDefinitionValueID $GroupPolicyConfigurationsDefinitionValue.id
 		                    $DefinitionValuePresentationValues = Get-GroupPolicyConfigurationsDefinitionValuesPresentationValues -GroupPolicyConfigurationID $id -GroupPolicyConfigurationsDefinitionValueID $GroupPolicyConfigurationsDefinitionValue.id
 		                    $OutDef = New-Object -TypeName PSCustomObject
@@ -1872,9 +4213,40 @@ else{
                                 $policyid = $copypolicy.id
                                 $DCP_resource = "deviceManagement/groupPolicyConfigurations/$($policyid)/definitionValues"
                                 $uri = "https://graph.microsoft.com/$graphApiVersion/$($DCP_resource)"
-			                    Invoke-RestMethod -ErrorAction SilentlyContinue -Uri $uri -Headers $authToken -Method Post -Body $json -ContentType "application/json"
+			                    #Invoke-RestMethod -ErrorAction SilentlyContinue -Uri $uri -Headers $authToken -Method Post -Body $json -ContentType "application/json"
+                                try {
+                                Invoke-MgGraphRequest -Uri $uri -Method Post -Body $json -ContentType "application/json"
+                                }
+                                catch {}
                             }
                         }
+            }
+            if ($policyuri -like "https://graph.microsoft.com/beta/deviceManagement/templates*") {
+            write-host "It's a security intent, add the settings"
+            $policyid = $copypolicy.id
+            $uri = "https://graph.microsoft.com/beta/deviceManagement/intents/$policyid/updateSettings"
+            $values = ($policyjson | convertfrom-json).values[1]
+            $settingjson = @"
+            {
+  "settings": [
+"@
+$countarray = $values.Count
+$start = 0
+foreach ($value in $values) {
+$settingjson += $value | convertto-json
+$start++
+if ($start -ne $countarray) {
+$settingjson += ","
+}
+}
+            $settingjson += @"
+  ]
+}
+"@
+            $body = ([System.Text.Encoding]::UTF8.GetBytes($settingjson.tostring()))
+
+Invoke-MgGraphRequest -Uri $uri -Method POST -Body $body -ContentType "application/json; charset=utf-8" 
+
             }
 
         }
@@ -1882,22 +4254,6 @@ else{
             }
 
         ##Clear Tenant Connections
-Disconnect-AzureAD
-        if ($global:authToken)
-{
-    Clear-Variable -Name authToken -Scope Global
-}
-else{
-    Write-Host "The authtoken is null."
-}
-
-if ($global:authResult)
-{
-    Clear-Variable -Name authResult -Scope Global
-}
-else{
-    Write-Host "The authtoken is null."
-}
-    
+Disconnect-MgGraph
 
 Stop-Transcript

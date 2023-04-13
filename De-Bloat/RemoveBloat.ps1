@@ -17,13 +17,30 @@
 .OUTPUTS
 C:\ProgramData\Debloat\Debloat.log
 .NOTES
-  Version:        2.1
+  Version:        2.991
   Author:         Andrew Taylor
   Twitter:        @AndrewTaylor_2
   WWW:            andrewstaylor.com
-  Creation Date:  03/07/2022
+  Creation Date:  08/03/2022
   Purpose/Change: Initial script development
   Change: 12/08/2022 - Added additional HP applications
+  Change 23/09/2022 - Added Clipchamp (new in W11 22H2)
+  Change 28/10/2022 - Fixed issue with Dell apps
+  Change 23/11/2022 - Added Teams Machine wide to exceptions
+  Change 27/11/2022 - Added Dell apps
+  Change 07/12/2022 - Whitelisted Dell Audio and Firmware
+  Change 19/12/2022 - Added Windows 11 start menu support
+  Change 20/12/2022 - Removed Gaming Menu from Settings
+  Change 18/01/2023 - Fixed Scheduled task error and cleared up $null posistioning
+  Change 22/01/2023 - Re-enabled Telemetry for Endpoint Analytics
+  Change 30/01/2023 - Added Microsoft Family to removal list
+  Change 31/01/2023 - Fixed Dell loop
+  Change 08/02/2023 - Fixed HP apps (thanks to http://gerryhampsoncm.blogspot.com/2023/02/remove-pre-installed-hp-software-during.html?m=1)
+  Change 08/02/2023 - Removed reg keys for Teams Chat
+  Change 14/02/2023 - Added HP Sure Apps
+  Change 07/03/2023 - Enabled Location tracking (with commenting to disable)
+  Change 08/03/2023 - Teams chat fix
+  Change 10/03/2023 - Dell array fix
   
 .EXAMPLE
 N/A
@@ -53,6 +70,39 @@ If (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 $ErrorActionPreference = 'silentlycontinue'
 
 
+Function Get-ScriptVersion(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to check if the running script is the latest version
+    .DESCRIPTION
+    This function checks GitHub and compares the 'live' version with the one running
+    .EXAMPLE
+    Get-ScriptVersion
+    Returns a warning and URL if outdated
+    .NOTES
+    NAME: Get-ScriptVersion
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $liveuri
+    )
+$contentheaderraw = (Invoke-WebRequest -Uri $liveuri -Method Get)
+$contentheader = $contentheaderraw.Content.Split([Environment]::NewLine)
+$liveversion = (($contentheader | Select-String 'Version:') -replace '[^0-9.]','') | Select-Object -First 1
+$currentversion = ((Get-Content -Path $PSCommandPath | Select-String -Pattern "Version: *") -replace '[^0-9.]','') | Select-Object -First 1
+if ($liveversion -ne $currentversion) {
+write-host "Script has been updated, please download the latest version from $liveuri" -ForegroundColor Red
+}
+}
+Get-ScriptVersion -liveuri "https://raw.githubusercontent.com/andrew-s-taylor/public/main/De-Bloat/RemoveBloat.ps1"
+
+
+
+
 #Create Folder
 $DebloatFolder = "C:\ProgramData\Debloat"
 If (Test-Path $DebloatFolder) {
@@ -66,6 +116,7 @@ Else {
 }
 
 Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
+
 
 ############################################################################################################
 #                                        Remove AppX Packages                                              #
@@ -81,7 +132,7 @@ Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
     Microsoft.BioEnrollment|Microsoft.CredDialogHost|Microsoft.ECApp|Microsoft.LockApp|Microsoft.MicrosoftEdgeDevToolsClient|Microsoft.MicrosoftEdge|Microsoft.PPIProjection|Microsoft.Win32WebViewHost|Microsoft.Windows.Apprep.ChxApp|`
     Microsoft.Windows.AssignedAccessLockApp|Microsoft.Windows.CapturePicker|Microsoft.Windows.CloudExperienceHost|Microsoft.Windows.ContentDeliveryManager|Microsoft.Windows.Cortana|Microsoft.Windows.NarratorQuickStart|`
     Microsoft.Windows.ParentalControls|Microsoft.Windows.PeopleExperienceHost|Microsoft.Windows.PinningConfirmationDialog|Microsoft.Windows.SecHealthUI|Microsoft.Windows.SecureAssessmentBrowser|Microsoft.Windows.ShellExperienceHost|`
-    Microsoft.Windows.XGpuEjectDialog|Microsoft.XboxGameCallableUI|Windows.CBSPreview|windows.immersivecontrolpanel|Windows.PrintDialog|Microsoft.VCLibs.140.00|Microsoft.Services.Store.Engagement|Microsoft.UI.Xaml.2.0|*Nvidia*'
+    Microsoft.Windows.XGpuEjectDialog|Microsoft.XboxGameCallableUI|Windows.CBSPreview|windows.immersivecontrolpanel|Windows.PrintDialog|Microsoft.XboxGameCallableUI|Microsoft.VCLibs.140.00|Microsoft.Services.Store.Engagement|Microsoft.UI.Xaml.2.0|*Nvidia*'
     Get-AppxPackage -AllUsers | Where-Object {$_.Name -NotMatch $WhitelistedApps -and $_.Name -NotMatch $NonRemovable} | Remove-AppxPackage
     Get-AppxPackage -allusers | Where-Object {$_.Name -NotMatch $WhitelistedApps -and $_.Name -NotMatch $NonRemovable} | Remove-AppxPackage
     Get-AppxProvisionedPackage -Online | Where-Object {$_.PackageName -NotMatch $WhitelistedApps -and $_.PackageName -NotMatch $NonRemovable} | Remove-AppxProvisionedPackage -Online
@@ -150,7 +201,9 @@ Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
         "*Dolby*"
         "*Office*"
         "*Disney*"
-             
+        "clipchamp.clipchamp"
+        "*gaming*"
+        "MicrosoftCorporationII.MicrosoftFamily"
         #Optional: Typically not removed but you can if you need to for some reason
         #"*Microsoft.Advertising.Xaml_10.1712.5.0_x64__8wekyb3d8bbwe*"
         #"*Microsoft.Advertising.Xaml_10.1712.5.0_x86__8wekyb3d8bbwe*"
@@ -160,9 +213,11 @@ Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
         #"*Microsoft.Windows.Photos*"
         #"*Microsoft.WindowsCalculator*"
         #"*Microsoft.WindowsStore*"
+
     )
     foreach ($Bloat in $Bloatware) {
-        Get-AppxPackage -allusers -Name $Bloat| Remove-AppxPackage
+        
+        Get-AppxPackage -allusers -Name $Bloat| Remove-AppxPackage -AllUsers
         Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like $Bloat | Remove-AppxProvisionedPackage -Online
         Write-Host "Trying to remove $Bloat."
     }
@@ -217,6 +272,9 @@ Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
     #Disables Windows Feedback Experience
     Write-Host "Disabling Windows Feedback Experience program"
     $Advertising = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AdvertisingInfo"
+    If (!(Test-Path $Advertising)) {
+        New-Item $Advertising
+    }
     If (Test-Path $Advertising) {
         Set-ItemProperty $Advertising Enabled -Value 0 
     }
@@ -224,6 +282,9 @@ Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
     #Stops Cortana from being used as part of your Windows Search Function
     Write-Host "Stopping Cortana from being used as part of your Windows Search Function"
     $Search = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
+    If (!(Test-Path $Search)) {
+        New-Item $Search
+    }
     If (Test-Path $Search) {
         Set-ItemProperty $Search AllowCortana -Value 0 
     }
@@ -295,32 +356,36 @@ Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
     Set-ItemProperty $Live  NoTileApplicationNotification -Value 1 
         
     #Turns off Data Collection via the AllowTelemtry key by changing it to 0
-    Write-Host "Turning off Data Collection"
-    $DataCollection1 = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection"
-    $DataCollection2 = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
-    $DataCollection3 = "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Policies\DataCollection"    
-    If (Test-Path $DataCollection1) {
-        Set-ItemProperty $DataCollection1  AllowTelemetry -Value 0 
-    }
-    If (Test-Path $DataCollection2) {
-        Set-ItemProperty $DataCollection2  AllowTelemetry -Value 0 
-    }
-    If (Test-Path $DataCollection3) {
-        Set-ItemProperty $DataCollection3  AllowTelemetry -Value 0 
-    }
+    # This is needed for Intune reporting to work, uncomment if using via other method
+    #Write-Host "Turning off Data Collection"
+    #$DataCollection1 = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection"
+    #$DataCollection2 = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection"
+    #$DataCollection3 = "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Policies\DataCollection"    
+    #If (Test-Path $DataCollection1) {
+    #    Set-ItemProperty $DataCollection1  AllowTelemetry -Value 0 
+    #}
+    #If (Test-Path $DataCollection2) {
+    #    Set-ItemProperty $DataCollection2  AllowTelemetry -Value 0 
+    #}
+    #If (Test-Path $DataCollection3) {
+    #    Set-ItemProperty $DataCollection3  AllowTelemetry -Value 0 
+    #}
     
+
+###Enable location tracking for "find my device", uncomment if you don't need it
+
     #Disabling Location Tracking
-    Write-Host "Disabling Location Tracking"
-    $SensorState = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Overrides\{BFA794E4-F964-4FDB-90F6-51056BFE4B44}"
-    $LocationConfig = "HKLM:\SYSTEM\CurrentControlSet\Services\lfsvc\Service\Configuration"
-    If (!(Test-Path $SensorState)) {
-        New-Item $SensorState
-    }
-    Set-ItemProperty $SensorState SensorPermissionState -Value 0 
-    If (!(Test-Path $LocationConfig)) {
-        New-Item $LocationConfig
-    }
-    Set-ItemProperty $LocationConfig Status -Value 0 
+    #Write-Host "Disabling Location Tracking"
+    #$SensorState = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Sensor\Overrides\{BFA794E4-F964-4FDB-90F6-51056BFE4B44}"
+    #$LocationConfig = "HKLM:\SYSTEM\CurrentControlSet\Services\lfsvc\Service\Configuration"
+    #If (!(Test-Path $SensorState)) {
+    #    New-Item $SensorState
+    #}
+    #Set-ItemProperty $SensorState SensorPermissionState -Value 0 
+    #If (!(Test-Path $LocationConfig)) {
+    #    New-Item $LocationConfig
+    #}
+    #Set-ItemProperty $LocationConfig Status -Value 0 
         
     #Disables People icon on Taskbar
     Write-Host "Disabling People icon on Taskbar"
@@ -368,27 +433,27 @@ Start-Transcript -Path "C:\ProgramData\Debloat\Debloat.log"
     #Disables scheduled tasks that are considered unnecessary 
     Write-Host "Disabling scheduled tasks"
     $task1 = Get-ScheduledTask -TaskName XblGameSaveTaskLogon -ErrorAction SilentlyContinue
-    if ($task1 -ne $null) {
+    if ($null -ne $task1) {
     Get-ScheduledTask  XblGameSaveTaskLogon | Disable-ScheduledTask -ErrorAction SilentlyContinue
     }
     $task2 = Get-ScheduledTask -TaskName XblGameSaveTask -ErrorAction SilentlyContinue
-    if ($task2 -ne $null) {
+    if ($null -ne $task2) {
     Get-ScheduledTask  XblGameSaveTask | Disable-ScheduledTask -ErrorAction SilentlyContinue
     }
     $task3 = Get-ScheduledTask -TaskName Consolidator -ErrorAction SilentlyContinue
-    if ($task3 -ne $null) {
+    if ($null -ne $task3) {
     Get-ScheduledTask  Consolidator | Disable-ScheduledTask -ErrorAction SilentlyContinue
     }
     $task4 = Get-ScheduledTask -TaskName UsbCeip -ErrorAction SilentlyContinue
-    if ($task4 -ne $null) {
+    if ($null -ne $task4) {
     Get-ScheduledTask  UsbCeip | Disable-ScheduledTask -ErrorAction SilentlyContinue
     }
     $task5 = Get-ScheduledTask -TaskName DmClient -ErrorAction SilentlyContinue
-    if ($task5 -ne $null) {
+    if ($null -ne $task5) {
     Get-ScheduledTask  DmClient | Disable-ScheduledTask -ErrorAction SilentlyContinue
     }
     $task6 = Get-ScheduledTask -TaskName DmClientOnScenarioDownload -ErrorAction SilentlyContinue
-    if ($task6 -ne $null) {
+    if ($null -ne $task6) {
     Get-ScheduledTask  DmClientOnScenarioDownload | Disable-ScheduledTask -ErrorAction SilentlyContinue
     }
 
@@ -442,6 +507,28 @@ If ($null -ne $ProvisionedPackage)
 {
     Remove-AppxProvisionedPackage -online -Packagename $ProvisionedPackage.Packagename
 }
+
+##Tweak reg permissions
+invoke-webrequest -uri "https://github.com/andrew-s-taylor/public/raw/main/De-Bloat/SetACL.exe" -outfile "C:\Windows\Temp\SetACL.exe"
+C:\Windows\Temp\SetACL.exe -on "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -ot reg -actn setowner -ownr "n:Everyone"
+ C:\Windows\Temp\SetACL.exe -on "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications" -ot reg -actn ace -ace "n:Everyone;p:full"
+Remove-Item C:\Windows\Temp\SetACL.exe -recurse
+
+
+##Stop it coming back
+$registryPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Communications"
+If (!(Test-Path $registryPath)) { 
+    New-Item $registryPath
+}
+Set-ItemProperty $registryPath ConfigureChatAutoInstall -Value 0
+
+
+##Unpin it
+$registryPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Chat"
+If (!(Test-Path $registryPath)) { 
+    New-Item $registryPath
+}
+Set-ItemProperty $registryPath "ChatIcon" -Value 2
 write-host "Removed Teams Chat"
 
 
@@ -453,32 +540,82 @@ write-host "Removed Teams Chat"
 write-host "Clearing Start Menu"
 #Delete layout file if it already exists
 
-If(Test-Path C:\Windows\StartLayout.xml)
+##Check windows version
+$version = Get-WMIObject win32_operatingsystem | Select-Object Caption
+if ($version.Caption -like "*Windows 10*") {
+    write-host "Windows 10 Detected"
+    write-host "Removing Current Layout"
+    If(Test-Path C:\Windows\StartLayout.xml)
 
-{
+    {
+    
+    Remove-Item C:\Windows\StartLayout.xml
+    
+    }
+    write-host "Creating Default Layout"
+    #Creates the blank layout file
+    
+    Write-Output "<LayoutModificationTemplate xmlns:defaultlayout=""http://schemas.microsoft.com/Start/2014/FullDefaultLayout"" xmlns:start=""http://schemas.microsoft.com/Start/2014/StartLayout"" Version=""1"" xmlns=""http://schemas.microsoft.com/Start/2014/LayoutModification"">" >> C:\Windows\StartLayout.xml
+    
+    Write-Output " <LayoutOptions StartTileGroupCellWidth=""6"" />" >> C:\Windows\StartLayout.xml
+    
+    Write-Output " <DefaultLayoutOverride>" >> C:\Windows\StartLayout.xml
+    
+    Write-Output " <StartLayoutCollection>" >> C:\Windows\StartLayout.xml
+    
+    Write-Output " <defaultlayout:StartLayout GroupCellWidth=""6"" />" >> C:\Windows\StartLayout.xml
+    
+    Write-Output " </StartLayoutCollection>" >> C:\Windows\StartLayout.xml
+    
+    Write-Output " </DefaultLayoutOverride>" >> C:\Windows\StartLayout.xml
+    
+    Write-Output "</LayoutModificationTemplate>" >> C:\Windows\StartLayout.xml
+}
+if ($version.Caption -like "*Windows 11*") {
+    write-host "Windows 11 Detected"
+    write-host "Removing Current Layout"
+    If(Test-Path "C:\Users\Default\AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml")
 
-Remove-Item C:\Windows\StartLayout.xml
+    {
+    
+    Remove-Item "C:\Users\Default\AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml"
+    
+    }
+    
+$blankjson = @'
+{ 
+    "pinnedList": [ 
+      { "desktopAppId": "MSEdge" }, 
+      { "packagedAppId": "Microsoft.WindowsStore_8wekyb3d8bbwe!App" }, 
+      { "packagedAppId": "desktopAppId":"Microsoft.Windows.Explorer" } 
+    ] 
+  }
+'@
 
+$blankjson | Out-File "C:\Users\Default\AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml" -Encoding utf8 -Force
 }
 
-write-host "Creating Default Layout"
-#Creates the blank layout file
 
-Write-Output "<LayoutModificationTemplate xmlns:defaultlayout=""http://schemas.microsoft.com/Start/2014/FullDefaultLayout"" xmlns:start=""http://schemas.microsoft.com/Start/2014/StartLayout"" Version=""1"" xmlns=""http://schemas.microsoft.com/Start/2014/LayoutModification"">" >> C:\Windows\StartLayout.xml
+############################################################################################################
+#                                              Remove Xbox Gaming                                          #
+#                                                                                                          #
+############################################################################################################
 
-Write-Output " <LayoutOptions StartTileGroupCellWidth=""6"" />" >> C:\Windows\StartLayout.xml
-
-Write-Output " <DefaultLayoutOverride>" >> C:\Windows\StartLayout.xml
-
-Write-Output " <StartLayoutCollection>" >> C:\Windows\StartLayout.xml
-
-Write-Output " <defaultlayout:StartLayout GroupCellWidth=""6"" />" >> C:\Windows\StartLayout.xml
-
-Write-Output " </StartLayoutCollection>" >> C:\Windows\StartLayout.xml
-
-Write-Output " </DefaultLayoutOverride>" >> C:\Windows\StartLayout.xml
-
-Write-Output "</LayoutModificationTemplate>" >> C:\Windows\StartLayout.xml
+New-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\xbgm" -Name "Start" -PropertyType DWORD -Value 4 -Force
+Set-Service -Name XblAuthManager -StartupType Disabled
+Set-Service -Name XblGameSave -StartupType Disabled
+Set-Service -Name XboxGipSvc -StartupType Disabled
+Set-Service -Name XboxNetApiSvc -StartupType Disabled
+$task = Get-ScheduledTask -TaskName "Microsoft\XblGameSave\XblGameSaveTask" -ErrorAction SilentlyContinue
+if ($null -ne $task) {
+Set-ScheduledTask -TaskPath $task.TaskPath -Enabled $false
+}
+Take-Ownership -Path "$env:WinDir\System32\GameBarPresenceWriter.exe"
+Set-Acl -Path "$env:WinDir\System32\GameBarPresenceWriter.exe" -AclObject (Get-Acl -Path "$env:WinDir\System32\GameBarPresenceWriter.exe").SetAccessRuleProtection($true, $true) -InheritanceFlags "None" -AddAccessRule (New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators","FullControl","Allow"))
+Stop-Process -Name "GameBarPresenceWriter.exe" -Force
+Remove-Item "$env:WinDir\System32\GameBarPresenceWriter.exe" -Force -Confirm:$false
+New-ItemProperty -Path "HKLM:\Software\Policies\Microsoft\Windows\GameDVR" -Name "AllowgameDVR" -PropertyType DWORD -Value 0 -Force
+New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "SettingsPageVisibility" -PropertyType String -Value "hide:gaming-gamebar;gaming-gamedvr;gaming-broadcasting;gaming-gamemode;gaming-xboxnetworking" -Force
 
 ############################################################################################################
 #                                        Disable Edge Surf Game                                            #
@@ -500,7 +637,7 @@ write-host "Detecting Manufacturer"
 $details = Get-CimInstance -ClassName Win32_ComputerSystem
 $manufacturer = $details.Manufacturer
 
-if ($manufacturer -ccontains "HP") {
+if ($manufacturer -like "*HP*") {
     Write-Host "HP detected"
     #Remove HP bloat
 
@@ -521,7 +658,9 @@ $UninstallPrograms = @(
     "AD2F1837.HPSupportAssistant"
     "AD2F1837.HPSystemInformation"
     "AD2F1837.myHP"
-    "RealtekSemiconductorCorp.HPAudioControl"
+    "RealtekSemiconductorCorp.HPAudioControl",
+    "HP Sure Recover",
+    "HP Sure Run Module"
 
 )
 
@@ -568,11 +707,35 @@ $InstalledPrograms | ForEach-Object {
     }
     Catch {Write-Warning -Message "Failed to uninstall: [$($_.Name)]"}
 }
+
+
+#Remove HP Documentation
+$A = Start-Process -FilePath "C:\Program Files\HP\Documentation\Doc_uninstall.cmd" -Wait -passthru -NoNewWindow;$a.ExitCode
+
+##Remove Standard HP apps via msiexec
+$InstalledPrograms | ForEach-Object {
+$appname = $_.Name
+    Write-Host -Object "Attempting to uninstall: [$($_.Name)]..."
+
+    Try {
+        $Prod = Get-WMIObject -Classname Win32_Product | Where-Object Name -Match $appname
+        $Prod.UnInstall()
+        Write-Host -Object "Successfully uninstalled: [$($_.Name)]"
+    }
+    Catch {Write-Warning -Message "Failed to uninstall: [$($_.Name)]"}
+}
+
+##Remove HP Connect Optimizer
+invoke-webrequest -uri "https://raw.githubusercontent.com/andrew-s-taylor/public/main/De-Bloat/HPConnOpt.iss" -outfile "C:\Windows\Temp\HPConnOpt.iss"
+
+&'C:\Program Files (x86)\InstallShield Installation Information\{6468C4A5-E47E-405F-B675-A70A70983EA6}\setup.exe' @('-s', '-f1C:\Windows\Temp\HPConnOpt.iss')
+
 Write-Host "Removed HP bloat"
 }
 
 
-if ($manufacturer -ccontains "Dell") {
+
+if ($manufacturer -like "*Dell*") {
     Write-Host "Dell detected"
     #Remove Dell bloat
 
@@ -585,14 +748,22 @@ $UninstallPrograms = @(
     "Dell SupportAssist OS Recovery"
     "Dell SupportAssist"
     "Dell Optimizer Service"
+    "DellInc.PartnerPromo"
+    "DellInc.DellOptimizer"
+    "DellInc.DellCommandUpdate"
 )
 
-$InstalledPackages = Get-AppxPackage -AllUsers | Where-Object {($UninstallPackages -contains $_.Name)} #-or ($_.Name -match "^$HPidentifier")}
+$WhitelistedApps = @(
+    "WavesAudio.MaxxAudioProforDell2019"
+    "Dell - Extension*"
+    "Dell, Inc. - Firmware*"
+)
 
-$ProvisionedPackages = Get-AppxProvisionedPackage -Online | Where-Object {($UninstallPackages -contains $_.DisplayName)} #-or ($_.DisplayName -match "^$HPidentifier")}
+$InstalledPackages = Get-AppxPackage -AllUsers | Where-Object {(($_.Name -in $UninstallPrograms) -or ($_.Name -like "*Dell*")) -and ($_.Name -NotMatch $WhitelistedApps)}
 
-$InstalledPrograms = Get-Package | Where-Object {$UninstallPrograms -contains $_.Name}
+$ProvisionedPackages = Get-AppxProvisionedPackage -Online | Where-Object {(($_.Name -in $UninstallPrograms) -or ($_.Name -like "*Dell*")) -and ($_.Name -NotMatch $WhitelistedApps)}
 
+$InstalledPrograms = Get-Package | Where-Object {(($_.Name -in $UninstallPrograms) -or ($_.Name -like "*Dell*")) -and ($_.Name -NotMatch $WhitelistedApps)}
 # Remove provisioned packages first
 ForEach ($ProvPackage in $ProvisionedPackages) {
 
@@ -616,6 +787,19 @@ ForEach ($AppxPackage in $InstalledPackages) {
     }
     Catch {Write-Warning -Message "Failed to remove Appx package: [$($AppxPackage.Name)]"}
 }
+
+# Remove any bundled packages
+ForEach ($AppxPackage in $InstalledPackages) {
+                                            
+    Write-Host -Object "Attempting to remove Appx package: [$($AppxPackage.Name)]..."
+
+    Try {
+        $null = Get-AppxPackage -AllUsers -PackageTypeFilter Main, Bundle, Resource -Name $AppxPackage.Name | Remove-AppxPackage -AllUsers
+        Write-Host -Object "Successfully removed Appx package: [$($AppxPackage.Name)]"
+    }
+    Catch {Write-Warning -Message "Failed to remove Appx package: [$($AppxPackage.Name)]"}
+}
+
 
 # Remove installed programs
 $InstalledPrograms | ForEach-Object {
@@ -708,12 +892,14 @@ $whitelistapps = @(
     "Microsoft Edge Update"
     "Microsoft Edge WebView2 Runtime"
     "Google Chrome"
+    "Microsoft Teams"
+    "Teams Machine-Wide Installer"
 )
 
 $InstalledSoftware = Get-ChildItem "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
 foreach($obj in $InstalledSoftware){
      $name = $obj.GetValue('DisplayName')
-     if (($name -notcontains $whitelistapps) -and ($obj.GetValue('UninstallString') -ne $null)) {
+     if (($whitelistapps -notcontains $name) -and ($null -ne $obj.GetValue('UninstallString'))) {
         $uninstallcommand = $obj.GetValue('UninstallString')
         write-host "Uninstalling $name"
         if ($uninstallcommand -like "*msiexec*") {
@@ -736,7 +922,7 @@ foreach($obj in $InstalledSoftware){
 $InstalledSoftware32 = Get-ChildItem "HKLM:\Software\WOW6432NODE\Microsoft\Windows\CurrentVersion\Uninstall"
 foreach($obj32 in $InstalledSoftware32){
      $name32 = $obj32.GetValue('DisplayName')
-     if (($name32 -notcontains $whitelistapps) -and ($obj32.GetValue('UninstallString') -ne $null)) {
+     if (($whitelistapps -notcontains $name32) -and ($null -ne $obj32.GetValue('UninstallString'))) {
         $uninstallcommand32 = $obj.GetValue('UninstallString')
         write-host "Uninstalling $name"
                 if ($uninstallcommand32 -like "*msiexec*") {
@@ -757,7 +943,7 @@ foreach($obj32 in $InstalledSoftware32){
 ##Remove Chrome
 $chrome32path = "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome"
 
-if ($chrome32path -ne $null) {
+if ($null -ne $chrome32path) {
 
 $versions = (Get-ItemProperty -path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome').version
 ForEach ($version in $versions) {
@@ -771,7 +957,7 @@ Start-Process "$directory\Google\Chrome\Application\$version\Installer\setup.exe
 
 $chromepath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome"
 
-if ($chromepath -ne $null) {
+if ($null -ne $chromepath) {
 
 $versions = (Get-ItemProperty -path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Google Chrome').version
 ForEach ($version in $versions) {

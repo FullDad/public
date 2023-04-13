@@ -1,5 +1,5 @@
 <#PSScriptInfo
-.VERSION 1.1
+.VERSION 2.1
 .AUTHOR AndrewTaylor
 .DESCRIPTION Creates an Intune application from a Winget Manifest
 .GUID ebed646c-ee4a-418c-ac46-0a2af1925016
@@ -27,12 +27,14 @@ Winget YAML URL
 .OUTPUTS
 None
 .NOTES
-  Version:        1.0
+  Version:        2.1
   Author:         Andrew Taylor
   Twitter:        @AndrewTaylor_2
   WWW:            andrewstaylor.com
   Creation Date:  12/11/2021
+  Modified Date:  30/10/2022
   Purpose/Change: Initial script development
+  Change:   Switched AAD to Graph Module
   
 .EXAMPLE
 N/A
@@ -47,6 +49,38 @@ param (
     [String]
     $yamlFile
 )
+
+
+Function Get-ScriptVersion(){
+    
+    <#
+    .SYNOPSIS
+    This function is used to check if the running script is the latest version
+    .DESCRIPTION
+    This function checks GitHub and compares the 'live' version with the one running
+    .EXAMPLE
+    Get-ScriptVersion
+    Returns a warning and URL if outdated
+    .NOTES
+    NAME: Get-ScriptVersion
+    #>
+    
+    [cmdletbinding()]
+    
+    param
+    (
+        $liveuri
+    )
+$contentheaderraw = (Invoke-WebRequest -Uri $liveuri -Method Get)
+$contentheader = $contentheaderraw.Content.Split([Environment]::NewLine)
+$liveversion = (($contentheader | Select-String 'Version:') -replace '[^0-9.]','') | Select-Object -First 1
+$currentversion = ((Get-Content -Path $PSCommandPath | Select-String -Pattern "Version: *") -replace '[^0-9.]','') | Select-Object -First 1
+if ($liveversion -ne $currentversion) {
+write-host "Script has been updated, please download the latest version from $liveuri" -ForegroundColor Red
+}
+}
+Get-ScriptVersion -liveuri "https://raw.githubusercontent.com/andrew-s-taylor/public/main/Powershell%20Scripts/Intune/add-winget-package.ps1"
+
 
 
 ###############################################################################################################
@@ -68,19 +102,22 @@ else {
     }
 }
 
-#Install AZ Module if not available
-if (Get-Module -ListAvailable -Name AzureADPreview) {
-    Write-Host "AZ Ad Preview Module Already Installed"
+Write-Host "Installing Microsoft Graph modules if required (current user scope)"
+
+#Install MS Graph if not available
+if (Get-Module -ListAvailable -Name Microsoft.Graph) {
+    Write-Host "Microsoft Graph Already Installed"
 } 
 else {
     try {
-        Install-Module -Name AzureADPreview -Scope CurrentUser -Repository PSGallery -Force -AllowClobber 
+        Install-Module -Name Microsoft.Graph -Scope CurrentUser -Repository PSGallery -Force 
     }
     catch [Exception] {
         $_.message 
         exit
     }
 }
+
 
 #Install IntuneWin32App  if not available
 if (Get-Module -ListAvailable -Name IntuneWin32App ) {
@@ -101,18 +138,18 @@ else {
 #Importing Modules
 Import-Module powershell-yaml
 import-module IntuneWin32App 
-#Group creation needs preview module so we need to remove non-preview first
-# Unload the AzureAD module (or continue if it's already unloaded)
-Remove-Module AzureAD -ErrorAction SilentlyContinue
-# Load the AzureADPreview module
-Import-Module AzureADPreview
+Import-Module microsoft.graph
 
 #Get Creds and connect
-write-host "Connect to Azure"
-Connect-AzureAD
+#Connect to Graph
+Select-MgProfile -Name Beta
+Connect-MgGraph -Scopes  	RoleAssignmentSchedule.ReadWrite.Directory, Domain.Read.All, Domain.ReadWrite.All, Directory.Read.All, Policy.ReadWrite.ConditionalAccess, DeviceManagementApps.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, openid, profile, email, offline_access
+
 
 #Get Tenant ID
-$tenantId = (Get-AzureADTenantDetail | Select-Object -ExpandProperty ObjectID)
+$uri = "https://graph.microsoft.com/beta/organization"
+$tenantdetails = (Invoke-MgGraphRequest -Uri $uri -Method Get -OutputType PSObject).value
+$tenantid = $tenantdetails.id
 Connect-MSIntuneGraph -TenantID $tenantId
 
 ##Set Download Directory
@@ -199,11 +236,11 @@ $infourl = $obj.PackageUrl
 
 $groupname1 = $name + "-INSTALL"
 #Create Install Group
-$installgroup = New-AzureADMSGroup -DisplayName $adgroupinstall -Description "Install group for $name" -MailEnabled $False -MailNickName "group" -SecurityEnabled $True
+$installgroup = New-MgGroup -DisplayName $adgroupinstall -Description "Install group for $name" -SecurityEnabled -MailEnabled:$false -MailNickName "group" 
 
 $groupname2 = $name + "-UNINSTALL"
 #Create Uninstall Group
-$uninstallgroup = New-AzureADMSGroup -DisplayName $adgroupuninstall -Description "Uninstall group for $name" -MailEnabled $False -MailNickName "group" -SecurityEnabled $True
+$uninstallgroup = New-MgGroup -DisplayName $adgroupuninstall -Description "Uninstall group for $name" -SecurityEnabled -MailEnabled:$false -MailNickName "group" 
 
 $setupfile = "$path$name-Install.ps1"
 $setupfilename = "$name-Install.ps1"
